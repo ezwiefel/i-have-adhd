@@ -418,6 +418,21 @@ class SetupRecordTest(RoundTestCase):
         self.assertIn("--workspace", err.getvalue())
 
 
+class ProgressLogTest(RoundTestCase):
+    def test_log_says_where_the_round_is_and_what_is_next(self):
+        code, out, err = self.run_cli()
+
+        self.assertEqual(0, code, err)
+        self.assertIn("Stage 1/5: generate baseline. Next: generate comparator.", out)
+        self.assertIn("Stage 3/5: generate candidate. Next: judge stub-judge-a.", out)
+        self.assertIn("Stage 5/5: judge stub-judge-b. Next: reports.", out)
+        self.assertIn("progress: baseline replies", out)
+        self.assertIn("progress: judge stub-judge-a groups", out)
+
+    def test_child_scripts_stream_their_output(self):
+        self.assertEqual("1", run_round._runner_env(None)["PYTHONUNBUFFERED"])
+
+
 class EndToEndTest(RoundTestCase):
     def test_stub_round_writes_a_complete_results_folder(self):
         code, out, err = self.run_cli(

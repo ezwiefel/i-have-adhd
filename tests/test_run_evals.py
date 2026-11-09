@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -937,6 +939,20 @@ class ParallelGenerationTest(unittest.TestCase):
             self.assertEqual(0, run_evals.run_evaluations(args))
 
         self.assertEqual("8000", seen.read_text(encoding="utf-8").strip())
+
+    def test_progress_line_every_ten_replies_and_at_the_end(self):
+        stdout = io.StringIO()
+        with mock.patch.object(
+            run_evals.subprocess, "run", side_effect=lambda *_, **__: self.done()
+        ), contextlib.redirect_stdout(stdout):
+            run_evals.run_evaluations(self.args(12, parallel=1))
+
+        lines = [line for line in stdout.getvalue().splitlines() if line.startswith("progress:")]
+        self.assertEqual(2, len(lines), lines)
+        self.assertIn("baseline replies 10/12", lines[0])
+        self.assertIn("baseline replies 12/12", lines[1])
+        self.assertIn("$0.12 of $1.00", lines[1])
+        self.assertIn("0 failed attempts", lines[1])
 
     def test_budget_stops_new_calls_and_keeps_finished_rows(self):
         cost = json.dumps({"result": "ok", "usage": {}, "total_cost_usd": 0.6})

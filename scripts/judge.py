@@ -413,6 +413,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     skipped: list[tuple] = []
     lock = threading.Lock()
     halt = threading.Event()
+    progress = run_evals.Progress(
+        f"judge {args.runner} groups", len(complete), len(judged & set(complete))
+    )
+
+    def advance() -> None:
+        unreported = ", some unreported" if budget.unknown else ""
+        progress.advance(
+            f"${budget.spent:.2f} of ${budget.cap:.2f}{unreported}, {len(skipped)} skipped"
+        )
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("a", encoding="utf-8") as destination:
         def judge_one(key: tuple) -> None:
@@ -442,6 +452,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(f"skip {case_id}/trial {trial}: {exc}", file=sys.stderr)
                 with lock:
                     skipped.append(key)
+                    advance()
                 return
             with lock:
                 for row in scored:
@@ -449,6 +460,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         json.dumps({**row, "group_cost_usd": cost}, ensure_ascii=False) + "\n"
                     )
                 destination.flush()
+                advance()
             print(f"judged {case_id}/trial {trial}")
 
         run_evals.run_all(args.parallel, [partial(judge_one, key) for key in sorted(complete)], halt)

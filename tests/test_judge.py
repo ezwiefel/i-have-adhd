@@ -579,6 +579,18 @@ class BudgetTest(unittest.TestCase):
 
         self.assertEqual("8000", seen.read_text().strip())
 
+    def test_progress_line_reports_groups_and_spend(self):
+        self.write_runner(0.01)
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(0, self.judge("--budget-usd", "1"))
+
+        lines = [line for line in stdout.getvalue().splitlines() if line.startswith("progress:")]
+        self.assertEqual(1, len(lines), lines)
+        self.assertIn("judge stub groups 3/3", lines[0])
+        self.assertIn("$0.03 of $1.00", lines[0])
+
     def test_parallel_groups_overlap_and_costs_add_up(self):
         self.write_runner(0.01)
         reply = json.dumps(

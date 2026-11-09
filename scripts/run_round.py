@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -188,7 +189,7 @@ def _scrub(text: str) -> str:
 
 
 def _runner_env(runner: Optional[dict[str, Any]]) -> dict[str, str]:
-    env = dict(os.environ)
+    env = dict(os.environ, PYTHONUNBUFFERED="1")  # So a CI log shows each child's lines as they happen.
     if runner and runner.get("path_prepend"):
         prepend = runner["path_prepend"].replace("{root}", str(ROOT))
         env["PATH"] = prepend + os.pathsep + env.get("PATH", "")
@@ -575,7 +576,20 @@ def _write_shared_meta(plan: SimpleNamespace, status: str) -> None:
 # ---- round stages ---------------------------------------------------------------------
 
 
+def _stage(plan: SimpleNamespace, name: str) -> None:
+    """Say where the round is and what comes next, in one plain log line."""
+    index = plan.stages.index(name)
+    following = plan.stages[index + 1] if index + 1 < len(plan.stages) else "reports"
+    elapsed = run_evals.format_duration(time.monotonic() - plan.started)
+    print(
+        f"Stage {index + 1}/{len(plan.stages)}: {name}. Next: {following}. "
+        f"Reported spend ${reported_spend(plan.results):.2f}, {elapsed} so far.",
+        flush=True,
+    )
+
+
 def _generate(plan: SimpleNamespace, condition: str, output: Path, skill: Optional[Path]) -> None:
+    _stage(plan, f"generate {condition}")
     _step(
         "run_evals.py", "run",
         "--cases", plan.cases_path,
@@ -606,6 +620,8 @@ def _copy_shared_rows(plan: SimpleNamespace) -> None:
 
 
 def _run_scenarios(plan: SimpleNamespace) -> None:
+    if plan.scenarios:
+        _stage(plan, "capture scenarios")
     for scenario, trial, condition, path in _captures(plan):
         if _captured(path):
             continue
@@ -642,6 +658,8 @@ def _judge_and_report(
     """Judge one responses file with every judge, then write its reports."""
     scores = {name: directory / f"scores-{name}.jsonl" for name in plan.judges}
     for name, path in scores.items():
+        if directory == plan.variant_dir:
+            _stage(plan, f"judge {name}")
         _step(
             "judge.py",
             "--responses", responses,
@@ -678,6 +696,13 @@ def _judge_and_report(
 
 
 def _run_stages(plan: SimpleNamespace) -> None:
+    plan.started = time.monotonic()
+    plan.stages = [
+        *(f"generate {condition}" for condition in plan.conditions),
+        *(["capture scenarios"] if plan.scenarios else []),
+        *(f"judge {name}" for name in plan.judges),
+        *(f"judge scenario {scenario}" for scenario in plan.scenarios),
+    ]
     plan.shared_dir.mkdir(parents=True, exist_ok=True)
     plan.variant_dir.mkdir(parents=True, exist_ok=True)
     _write_shared_meta(plan, "running")
@@ -703,6 +728,7 @@ def _run_stages(plan: SimpleNamespace) -> None:
     _judge_and_report(plan, plan.variant_dir, plan.responses, plan.cases_path, plan.budget)
     for scenario in plan.scenarios:
         directory = plan.variant_dir / "scenarios" / scenario
+        _stage(plan, f"judge scenario {scenario}")
         _judge_and_report(
             plan, directory, directory / "responses.jsonl",
             ROOT / "evals" / "scenarios" / scenario / "case.jsonl", plan.scenario_budget,

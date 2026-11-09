@@ -30,6 +30,7 @@ WEIGHTS = {
     "concision": 0.10,
 }
 CONDITIONS = {"baseline", "candidate", "comparator"}
+PROGRESS_EVERY = 10
 
 
 @contextmanager
@@ -85,6 +86,31 @@ def positive_int(value: str) -> int:
     if not 1 <= number <= 16:
         raise argparse.ArgumentTypeError("must be from 1 to 16")
     return number
+
+
+def format_duration(seconds: float) -> str:
+    minutes, rest = divmod(round(seconds), 60)
+    return f"{minutes}m{rest:02d}s"
+
+
+class Progress:
+    """One plain log line every PROGRESS_EVERY items and at the end; CI logs have no live bar."""
+
+    def __init__(self, label: str, total: int, already_done: int = 0) -> None:
+        self.label = label
+        self.total = total
+        self.done = already_done
+        self.already_done = already_done
+        self.started = time.monotonic()
+
+    def advance(self, detail: str) -> None:
+        """Count one finished item. Callers hold their lock, so the count stays exact."""
+        self.done += 1
+        if self.done % PROGRESS_EVERY and self.done != self.total:
+            return
+        per_item = (time.monotonic() - self.started) / (self.done - self.already_done)
+        left = format_duration(per_item * (self.total - self.done))
+        print(f"progress: {self.label} {self.done}/{self.total}, {detail}, about {left} left", flush=True)
 
 
 def run_all(parallel: int, jobs: Iterable[Callable[[], None]], halt: threading.Event) -> None:
@@ -526,10 +552,22 @@ def run_evaluations(args: argparse.Namespace) -> int:
     halt = threading.Event()
     exhausted = threading.Event()
     call_cap = runner.get("max_call_usd")
+    jobs = [
+        (trial, case)
+        for trial in range(1, args.trials + 1)
+        for case in cases
+        if not args.case or case["id"] in args.case
+    ]
+    progress = Progress(
+        f"{args.condition} replies",
+        len(jobs),
+        sum((case["id"], trial, args.condition, args.runner) in done for trial, case in jobs),
+    )
+    failed_attempts = 0
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("a", encoding="utf-8") as destination:
         def generate(trial: int, case: dict[str, Any]) -> None:
-            nonlocal reported_cost
+            nonlocal reported_cost, failed_attempts
             key = (case["id"], trial, args.condition, args.runner)
             if key in done:
                 print(f"skip completed {args.condition} trial {trial}: {case['id']}")
@@ -572,6 +610,8 @@ def run_evaluations(args: argparse.Namespace) -> int:
                         cost = _reported_cost(cost)
                         break
                 failed_cost = attempt_cost(completed.stdout, response_format)
+                with lock:
+                    failed_attempts += 1
                 if failed_cost is not None:
                     with lock:
                         reported_cost += failed_cost
@@ -608,16 +648,14 @@ def run_evaluations(args: argparse.Namespace) -> int:
                 }
                 destination.write(json.dumps(row, ensure_ascii=False) + "\n")
                 destination.flush()
+                progress.advance(
+                    f"${reported_cost:.2f} of ${args.budget_usd:.2f}, {failed_attempts} failed attempts"
+                )
             print(f"{args.condition} trial {trial}: {case['id']}")
 
         run_all(
             args.parallel,
-            [
-                partial(generate, trial, case)
-                for trial in range(1, args.trials + 1)
-                for case in cases
-                if not args.case or case["id"] in args.case
-            ],
+            [partial(generate, trial, case) for trial, case in jobs],
             halt,
         )
     if exhausted.is_set():
