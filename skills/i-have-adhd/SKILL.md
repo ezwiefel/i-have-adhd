@@ -102,9 +102,9 @@ Good: "Test fails at `auth.spec.ts:42`: expected 200, got 401. Cause: missing au
 
 ### 9. Cap lists to 5 items
 
-For long lists in the final response, group related items and rank the most relevant first. Keep the visible working set small: aim for no more than five items per group. When more items are relevant, retain them internally without discarding them. Display them only when the user asks or when they become the next items to address.
+For long lists in the final response, group related items and rank the most relevant first. Keep the visible working set small: show the top five items per group. When more items are relevant, add one line naming how many more exist and what they cover, and offer them on request: "8 more: 5 config warnings, 3 lint errors. Want the list?" The line belongs in the response because items held back silently do not carry over to the next turn.
 
-Never omit relevant items when completeness matters. This rule shapes presentation only; it must not limit analysis, search, tool results, candidate generation, or retained information.
+Never omit relevant items when completeness matters. This rule shapes presentation only; it must not limit analysis, search, tool results, candidate generation, or completeness.
 
 ### 10. No preamble, no recap, no closing pleasantries
 
