@@ -122,7 +122,7 @@ def _describe_rows(keys: list[tuple[str, Any]]) -> str:
     return ", ".join(f"{case_id}/trial {trial}" for case_id, trial in keys)
 
 
-def _check_pairing(grouped: dict[str, list[dict[str, Any]]]) -> None:
+def _check_pairing(grouped: dict[str, list[dict[str, Any]]], reference: str = "baseline") -> None:
     """Conditions are only comparable when judged on identical rows."""
     coverage = {
         condition: Counter((row["case_id"], row["trial"]) for row in rows)
@@ -134,19 +134,19 @@ def _check_pairing(grouped: dict[str, list[dict[str, Any]]]) -> None:
             raise ValueError(
                 f"{condition}: duplicate score rows for {_describe_rows(repeated)}"
             )
-    baseline = coverage["baseline"]
+    expected = coverage[reference]
     for condition, counts in sorted(coverage.items()):
-        if condition == "baseline" or counts == baseline:
+        if condition == reference or counts == expected:
             continue
         details = []
-        missing = sorted(set(baseline) - set(counts))
+        missing = sorted(set(expected) - set(counts))
         if missing:
             details.append(f"missing {_describe_rows(missing)}")
-        unmatched = sorted(set(counts) - set(baseline))
+        unmatched = sorted(set(counts) - set(expected))
         if unmatched:
             details.append(f"unmatched {_describe_rows(unmatched)}")
         raise ValueError(
-            f"{condition} was not judged on the same rows as baseline: "
+            f"{condition} was not judged on the same rows as {reference}: "
             + "; ".join(details)
         )
 

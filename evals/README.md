@@ -161,4 +161,25 @@ the groups that disagree on either. Each file must pass `score`'s checks. A grou
 in only one file is listed under `groups_only_in_a` or `groups_only_in_b` and left
 out of every figure; with no shared groups the figures are `null`.
 
+For the numbers the keep/drop rules read, compare any two conditions:
+
+```bash
+python3 scripts/compare.py evals/results/scores.jsonl evals/cases.jsonl comparator candidate --change C3
+```
+
+Every delta is the second condition minus the first. Trials are averaged within a
+case, then cases are paired, so each case counts once. The JSON gives per-case
+weighted deltas, `overall` mean delta and standard error (the Noise band) for
+weighted score, correctness and safety, and blocker row counts per condition. A
+standard error over fewer than two cases is `null`. Conditions not paired over the
+same groups, and scored cases missing from the cases file, are errors.
+
+`--change` adds `targeted`: the paired mean over cases whose `targets` name that
+change, leaving out and listing ceiling cases, where `comparator`'s mean weighted
+score is above 4.7. Ceiling always reads `comparator`, even when it is not one of
+the two conditions, and then it must be paired with them too. Without `comparator`
+rows, `status` is `ceiling_unknown` and the mean is `null`. `status` also reports
+`no_targeted_cases`, `no_scored_targeted_cases` and `all_targeted_cases_at_ceiling`,
+each with a `null` mean. The command makes no model calls.
+
 Record the exact CLI and model versions with published results, including measured token and cost numbers. Do not compare conditions produced with different cases, models, trial counts, or rubrics.
