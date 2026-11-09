@@ -81,7 +81,7 @@ If the harness has a task or plan tool, use it for multi-step work: one item per
 
 ### 6. Give specific time estimates
 
-Vague estimates fail. Ballpark in concrete units.
+Give an estimate when there is work ahead. Vague estimates fail, and a single number overstates how well the work can be predicted. Use a concrete range plus the factor that decides where in the range it lands.
 
 Bad: "This will take some work."
 Good: "About 15 minutes if tests already cover this. An afternoon if not."
