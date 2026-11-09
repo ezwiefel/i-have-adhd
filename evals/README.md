@@ -110,4 +110,6 @@ Either way, apply the release gate:
 python3 scripts/run_evals.py score evals/results/scores.jsonl
 ```
 
+Both `score` and `measure` need `baseline` plus at least one other condition. With no `candidate` rows there is nothing to gate, so `score` reports `release_gate` as `null`.
+
 Record the exact CLI and model versions with published results, including measured token and cost numbers. Do not compare conditions produced with different cases, models, trial counts, or rubrics.

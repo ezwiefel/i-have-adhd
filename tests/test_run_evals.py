@@ -163,6 +163,60 @@ class EvaluationHarnessTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate score rows"):
             run_evals.summarize_scores(rows)
 
+    def test_score_summary_reports_null_gate_without_candidate(self):
+        rows = [
+            self._score_row("direct-answer", "baseline", 3),
+            self._score_row("direct-answer", "comparator", 4),
+        ]
+
+        summary = run_evals.summarize_scores(rows)
+
+        self.assertIsNone(summary["release_gate"])
+        self.assertAlmostEqual(4.0, summary["conditions"]["comparator"]["weighted_score"])
+
+    def test_summaries_require_baseline_and_another_condition(self):
+        for conditions in (("baseline",), ("candidate", "comparator")):
+            with self.subTest(conditions=conditions):
+                with self.assertRaisesRegex(ValueError, "baseline and at least one other"):
+                    run_evals.summarize_scores(
+                        [self._score_row("a", condition, 3) for condition in conditions]
+                    )
+                with self.assertRaisesRegex(ValueError, "baseline and at least one other"):
+                    run_evals.summarize_usage(
+                        [self._usage_row("a", condition, "ok", 0, {}) for condition in conditions]
+                    )
+
+    def test_usage_summary_accepts_baseline_and_comparator(self):
+        rows = [
+            self._usage_row("a", "baseline", "long answer", 0.1, {"output_tokens": 20}),
+            self._usage_row("a", "comparator", "short", 0.15, {"output_tokens": 10}),
+        ]
+
+        summary = run_evals.summarize_usage(rows)
+
+        self.assertEqual(["baseline", "comparator"], sorted(summary["conditions"]))
+        self.assertEqual(["comparator"], list(summary["delta"]))
+        self.assertEqual(-10, summary["delta"]["comparator"]["output_tokens"])
+
+    def test_score_and_measure_cli_accept_baseline_and_comparator(self):
+        files = {
+            "score": [self._score_row("a", c, 3) for c in ("baseline", "comparator")],
+            "measure": [self._usage_row("a", c, "ok", 0.1, {}) for c in ("baseline", "comparator")],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            for command, rows in files.items():
+                with self.subTest(command=command):
+                    path = Path(temporary) / f"{command}.jsonl"
+                    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+                    result = subprocess.run(
+                        [sys.executable, str(ROOT / "scripts/run_evals.py"), command, str(path)],
+                        check=True, capture_output=True, text=True, timeout=10,
+                    )
+                    summary = json.loads(result.stdout)
+                    self.assertIn("comparator", summary["conditions"])
+                    if command == "score":
+                        self.assertIsNone(summary["release_gate"])
+
     def test_usage_summary_reports_token_and_cost_deltas(self):
         rows = [
             self._usage_row(
