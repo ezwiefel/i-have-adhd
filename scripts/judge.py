@@ -4,12 +4,13 @@
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
@@ -387,6 +388,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     config = json.loads(args.runner_config.read_text(encoding="utf-8"))
     runner = config[args.runner]
+    os.environ.update(runner.get("env") or {})
     # Runners start in an empty temp directory, so repo paths must be absolute.
     command = [part.replace("{root}", str(ROOT)) for part in runner["command"]]
     response_format = runner.get("response_format", "text")
@@ -449,20 +451,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 destination.flush()
             print(f"judged {case_id}/trial {trial}")
 
-        def judge_unless_halted(key: tuple) -> None:
-            if halt.is_set():
-                return
-            try:
-                judge_one(key)
-            except Exception:
-                halt.set()
-                raise
-
-        # Leaving the pool waits for groups in flight, so their rows are written before any raise.
-        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
-            futures = [pool.submit(judge_unless_halted, key) for key in sorted(complete)]
-        for future in futures:
-            future.result()
+        run_evals.run_all(args.parallel, [partial(judge_one, key) for key in sorted(complete)], halt)
         # A null cost on the final group has no next group to stop it.
         stop_reason = stop_reason or budget.unmetered_stop()
 

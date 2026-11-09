@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import sys
 import subprocess
 import tempfile
@@ -562,6 +563,21 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(0, self.judge("--budget-usd", "1"))
 
         self.assertIn("--max-budget-usd 0.2500", self.call_log()[0])
+
+    def test_runner_env_reaches_the_call_on_a_direct_run(self):
+        self.write_inputs(("one",))
+        self.write_runner(0.01)
+        seen = self.tmp / "seen.txt"
+        config = json.loads(self.runner_config.read_text())
+        script = config["stub"]["command"][2]
+        config["stub"]["command"][2] = f'echo "$EVAL_TEST_LIMIT" > "{seen}"; {script}'
+        config["stub"]["env"] = {"EVAL_TEST_LIMIT": "8000"}
+        self.runner_config.write_text(json.dumps(config))
+
+        with mock.patch.dict(os.environ):
+            self.assertEqual(0, self.judge())
+
+        self.assertEqual("8000", seen.read_text().strip())
 
     def test_parallel_groups_overlap_and_costs_add_up(self):
         self.write_runner(0.01)

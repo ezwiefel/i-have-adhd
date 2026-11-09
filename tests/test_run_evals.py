@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -917,6 +918,21 @@ class ParallelGenerationTest(unittest.TestCase):
 
         ids = [row["case_id"] for row in run_evals.read_jsonl(self.output)]
         self.assertEqual(["case-0", "case-1", "case-2"], sorted(ids))
+
+    def test_runner_env_reaches_the_call_on_a_direct_run(self):
+        args = self.args(1, parallel=1)
+        seen = self.root / "seen.txt"
+        script = f'echo "$EVAL_TEST_LIMIT" > "{seen}"; echo \'{self.REPLY}\''
+        args.runner_config.write_text(json.dumps({"stub": {
+            "command": ["sh", "-c", script, "sh"],
+            "response_format": "claude-json",
+            "env": {"EVAL_TEST_LIMIT": "8000"},
+        }}), encoding="utf-8")
+
+        with mock.patch.dict(os.environ):
+            self.assertEqual(0, run_evals.run_evaluations(args))
+
+        self.assertEqual("8000", seen.read_text(encoding="utf-8").strip())
 
     def test_budget_stops_new_calls_and_keeps_finished_rows(self):
         cost = json.dumps({"result": "ok", "usage": {}, "total_cost_usd": 0.6})

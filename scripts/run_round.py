@@ -378,10 +378,18 @@ def _run_caps(plan: SimpleNamespace) -> float:
         sources.append(("candidate", plan.responses))
     generation = sum(_missing_rows(path, c, plan.expected_rows) for c, path in sources)
     captures = sum(not _captured(path) for *_, path in _captures(plan))
-    metered = len([name for name in plan.judges if name not in plan.unmetered])
+    metered_judges = [name for name in plan.judges if name not in plan.unmetered]
+    metered = len(metered_judges)
+    # Each worker can start one more call before it sees a cap is reached.
+    # shortcut: a runner with no max_call_usd adds nothing, so set one on any runner used in parallel.
+    overshoot = plan.parallel * (
+        generation * plan.runner.get("max_call_usd", 0)
+        + sum(plan.config[name].get("max_call_usd", 0) for name in metered_judges)
+    )
     return (
         plan.budget * (generation + metered)
         + plan.scenario_budget * (captures + metered * len(plan.scenarios))
+        + overshoot
     )
 
 
@@ -703,7 +711,7 @@ def run_round(args: argparse.Namespace) -> int:
     plan = _prepare(args)
     spent = reported_spend(plan.results)
     caps = _run_caps(plan)
-    # Runners can overshoot a cap by one call per worker, so reaching the limit counts as crossing it.
+    # Runners can overshoot a cap by one call, so reaching the limit counts as crossing it.
     if spent + caps >= SPEND_LIMIT_USD:
         raise RoundError(
             f"reported spend ${spent:.2f} plus this run's caps ${caps:.2f} would reach "

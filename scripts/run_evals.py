@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 import json
 import math
+import os
 import shlex
 import subprocess
 import sys
@@ -12,8 +13,9 @@ import tempfile
 import threading
 import time
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
@@ -83,6 +85,25 @@ def positive_int(value: str) -> int:
     if not 1 <= number <= 16:
         raise argparse.ArgumentTypeError("must be from 1 to 16")
     return number
+
+
+def run_all(parallel: int, jobs: Iterable[Callable[[], None]], halt: threading.Event) -> None:
+    """Run jobs at once, starting none once `halt` is set, then raise the first job's error."""
+
+    def run(job: Callable[[], None]) -> None:
+        if halt.is_set():
+            return
+        try:
+            job()
+        except Exception:
+            halt.set()
+            raise
+
+    # Leaving the pool waits for jobs in flight, so their rows are written before any raise.
+    with ThreadPoolExecutor(max_workers=parallel) as pool:
+        futures = [pool.submit(run, job) for job in jobs]
+    for future in futures:
+        future.result()
 
 
 def failed_spend_path(output: Path) -> Path:
@@ -474,6 +495,7 @@ def run_evaluations(args: argparse.Namespace) -> int:
         raise ValueError(f"--case matched no evaluation case: {', '.join(unknown)}")
     config = json.loads(args.runner_config.read_text(encoding="utf-8"))
     runner = config[args.runner]
+    os.environ.update(runner.get("env") or {})
     command = list(runner["command"])
     response_format = runner.get("response_format", "text")
     if response_format != "claude-json" and not args.allow_unmetered:
@@ -588,25 +610,16 @@ def run_evaluations(args: argparse.Namespace) -> int:
                 destination.flush()
             print(f"{args.condition} trial {trial}: {case['id']}")
 
-        def generate_unless_halted(trial: int, case: dict[str, Any]) -> None:
-            if halt.is_set():
-                return
-            try:
-                generate(trial, case)
-            except Exception:
-                halt.set()
-                raise
-
-        # Leaving the pool waits for calls in flight, so their rows are written before any raise.
-        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
-            futures = [
-                pool.submit(generate_unless_halted, trial, case)
+        run_all(
+            args.parallel,
+            [
+                partial(generate, trial, case)
                 for trial in range(1, args.trials + 1)
                 for case in cases
                 if not args.case or case["id"] in args.case
-            ]
-        for future in futures:
-            future.result()
+            ],
+            halt,
+        )
     if exhausted.is_set():
         return 2
     print(f"Reported cost: ${reported_cost:.4f}")

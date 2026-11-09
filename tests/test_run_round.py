@@ -65,6 +65,11 @@ class RoundTestCase(unittest.TestCase):
             code = run_round.main(argv)
         return code, out.getvalue(), err.getvalue()
 
+    def set_runner_limits(self, name, **limits):
+        config = json.loads((self.ws / "runners.stub.json").read_text("utf-8"))
+        config[name].update(limits)
+        (self.ws / "runners.stub.json").write_text(json.dumps(config), encoding="utf-8")
+
     def calls(self):
         text = self.calls_log.read_text(encoding="utf-8") if self.calls_log.exists() else ""
         return collections.Counter(text.split())
@@ -176,6 +181,14 @@ class SpendLimitTest(RoundTestCase):
     def test_runs_when_spend_plus_caps_stays_under_the_limit(self):
         self.write_prior_meta(114.5)
         code, _, err = self.run_cli()
+        self.assertEqual(0, code, err)
+
+    def test_parallel_overshoot_counts_toward_the_limit(self):
+        # Caps are $5, and each worker can start one $0.25 call past each of 3 generation caps.
+        self.set_runner_limits("stub", max_call_usd=0.25)
+        self.write_prior_meta(114)
+        self.assert_refused("--parallel=4", expect="$120")
+        code, _, err = self.run_cli("--parallel=1")
         self.assertEqual(0, code, err)
 
     def test_unmetered_judge_adds_no_cap(self):
@@ -337,11 +350,6 @@ class SetupRecordTest(RoundTestCase):
         code, _, err = self.run_cli()
         self.assertEqual(1, code)
         self.assertIn("judges", err)
-
-    def set_runner_limits(self, name, **limits):
-        config = json.loads((self.ws / "runners.stub.json").read_text("utf-8"))
-        config[name].update(limits)
-        (self.ws / "runners.stub.json").write_text(json.dumps(config), encoding="utf-8")
 
     def test_runner_env_reaches_the_call_and_is_recorded(self):
         own_log = self.ws / "generator-only.log"
