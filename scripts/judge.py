@@ -211,6 +211,12 @@ def invoke_judge(
                 return text, cost
             except (ValueError, AttributeError):
                 pass
+        if group_key:
+            print(
+                f"failed: judge {group_key[0]}/trial {group_key[1]}, runner attempt "
+                f"{attempt + 1} of {retries + 1} (exit {completed.returncode})",
+                file=sys.stderr,
+            )
         failed_cost = run_evals.attempt_cost(completed.stdout, response_format)
         if budget and failed_cost is not None:
             budget.failed_attempt(group_key, failed_cost)
@@ -313,6 +319,11 @@ def _judge_group(
         try:
             rows = parse_judge_scores(text, group_key, labels)
         except ValueError as exc:
+            print(
+                f"failed: judge {group_key[0]}/trial {group_key[1]}, attempt "
+                f"{attempt + 1} of {retries + 1} (malformed verdict)",
+                file=sys.stderr,
+            )
             last_error = exc
             budget.failed_attempt(group_key, cost)
             unreported = unreported or cost is None
@@ -429,7 +440,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             nonlocal stop_reason
             case_id, trial = key
             if key in judged:
-                print(f"skip judged {case_id}/trial {trial}")
                 return
             # Between groups, so everything already judged stays written.
             reason = budget.stop_reason()
@@ -461,7 +471,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                     )
                 destination.flush()
                 advance()
-            print(f"judged {case_id}/trial {trial}")
 
         run_evals.run_all(args.parallel, [partial(judge_one, key) for key in sorted(complete)], halt)
         # A null cost on the final group has no next group to stop it.

@@ -570,7 +570,6 @@ def run_evaluations(args: argparse.Namespace) -> int:
             nonlocal reported_cost, failed_attempts
             key = (case["id"], trial, args.condition, args.runner)
             if key in done:
-                print(f"skip completed {args.condition} trial {trial}: {case['id']}")
                 return
             prompt = _condition_prompt(case["prompt"], args.condition, args.condition_skill)
             row_key = dict(zip(("case_id", "trial", "condition", "runner"), key))
@@ -612,6 +611,12 @@ def run_evaluations(args: argparse.Namespace) -> int:
                 failed_cost = attempt_cost(completed.stdout, response_format)
                 with lock:
                     failed_attempts += 1
+                reason = f"exit {completed.returncode}" if completed.returncode else "unusable reply"
+                print(
+                    f"failed: {args.condition} {case['id']} trial {trial}, "
+                    f"attempt {attempt + 1} of {args.retries + 1} ({reason})",
+                    file=sys.stderr,
+                )
                 if failed_cost is not None:
                     with lock:
                         reported_cost += failed_cost
@@ -651,7 +656,6 @@ def run_evaluations(args: argparse.Namespace) -> int:
                 progress.advance(
                     f"${reported_cost:.2f} of ${args.budget_usd:.2f}, {failed_attempts} failed attempts"
                 )
-            print(f"{args.condition} trial {trial}: {case['id']}")
 
         run_all(
             args.parallel,

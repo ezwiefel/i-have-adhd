@@ -953,6 +953,19 @@ class ParallelGenerationTest(unittest.TestCase):
         self.assertIn("baseline replies 12/12", lines[1])
         self.assertIn("$0.12 of $1.00", lines[1])
         self.assertIn("0 failed attempts", lines[1])
+        self.assertNotIn("case-", stdout.getvalue())
+
+    def test_failed_attempt_names_the_item(self):
+        args = self.args(1, parallel=1)
+        args.retries = 1
+        failed = subprocess.CompletedProcess(["stub-runner"], 1, "", "boom")
+        stderr = io.StringIO()
+        with mock.patch.object(run_evals.subprocess, "run", side_effect=[failed, self.done()]), (
+            mock.patch.object(run_evals.time, "sleep")
+        ), contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, run_evals.run_evaluations(args))
+
+        self.assertIn("failed: baseline case-0 trial 1, attempt 1 of 2 (exit 1)", stderr.getvalue())
 
     def test_budget_stops_new_calls_and_keeps_finished_rows(self):
         cost = json.dumps({"result": "ok", "usage": {}, "total_cost_usd": 0.6})

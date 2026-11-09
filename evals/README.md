@@ -36,7 +36,7 @@ A reply can run away: with tools off, a model can still loop on imagined command
 
 The Opus and Sonnet runners also pass one fixed `--append-system-prompt` saying there are no tools or files. Without it, Opus 5.5 acted as if it had a working directory on action-style prompts: replies named the harness temp folder, and some looped to the output limit. Every condition gets the same note, so comparisons stay paired, and `run_round.py` records it under `limits`.
 
-Progress goes to stdout as plain lines, so a GitHub Actions log can show it live: `run_round.py` prints a `Stage n/m` line with the next stage and reported spend, and each generation or judge step prints a `progress:` line every 10 items with spend and time left.
+Progress goes to stdout as plain lines, so a GitHub Actions log can show it live: `run_round.py` prints a `Stage n/m` line with the next stage and reported spend, and each generation or judge step prints a `progress:` line every 10 items with spend and time left. Items that succeed print nothing else; each failed attempt prints a `failed:` line naming the item.
 
 `--parallel N` (1 to 16, default 1) runs up to N calls at once, here and in `judge.py`. Rows are still written as each call finishes, so file order follows completion. A budget check cannot see calls already in flight, so a cap can be overshot by up to one call per worker; `run_round.py` counts that against the $120 limit for any runner with `max_call_usd`.
 

@@ -590,6 +590,26 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(1, len(lines), lines)
         self.assertIn("judge stub groups 3/3", lines[0])
         self.assertIn("$0.03 of $1.00", lines[0])
+        self.assertNotIn("judged", stdout.getvalue())
+
+    def test_malformed_verdict_is_logged_with_its_group(self):
+        self.write_inputs(("one",))
+        self.write_runner(0.01, result="not json")
+
+        _, stderr = self.judge_quietly("--retries", "1")
+
+        self.assertIn("failed: judge one/trial 1, attempt 1 of 2 (malformed verdict)", stderr)
+
+    def test_runner_failure_is_logged_with_its_group(self):
+        self.write_inputs(("one",))
+        self.write_runner(0.01)
+        config = json.loads(self.runner_config.read_text())
+        config["stub"]["command"] = ["sh", "-c", "exit 3"]
+        self.runner_config.write_text(json.dumps(config))
+
+        _, stderr = self.judge_quietly("--retries", "1")
+
+        self.assertIn("failed: judge one/trial 1, runner attempt 1 of 2 (exit 3)", stderr)
 
     def test_parallel_groups_overlap_and_costs_add_up(self):
         self.write_runner(0.01)
