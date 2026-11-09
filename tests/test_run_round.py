@@ -450,6 +450,81 @@ class ResumeTest(RoundTestCase):
         self.assertEqual(0, code, err)
         self.assertEqual(1, len(run_evals.read_jsonl(capture)))
 
+    def test_billed_failures_reach_meta_and_reported_spend(self):
+        code, _, _ = self.run_cli(
+            f"--scenarios={SCENARIO}",
+            env=self.env(STUB_FAIL_MATCH=SKILL_MARKER, STUB_FAIL_COST_USD="0.5"),
+        )
+        self.assertEqual(1, code)
+        groups = len(self.cases) * TRIALS
+        costs = self.meta()["reported_costs"]
+        # Shared rows carry baseline and comparator; the one failed candidate attempt is on top.
+        self.assertAlmostEqual(0.5, costs["generation_usd"])
+        self.assertAlmostEqual(0.5, costs["total_usd"])
+        shared_total = self.COST * groups * 2
+        self.assertAlmostEqual(shared_total, costs["shared_usd_not_in_total"])
+        self.assertAlmostEqual(0.5 + shared_total, run_round.reported_spend(self.results))
+
+    def test_failed_scenario_spend_is_counted_once_and_does_not_block_resume(self):
+        turn = run_scenario_eval.load_scenario(ROOT / "evals/scenarios" / SCENARIO)["turns"][0]
+        code, _, err = self.run_cli(
+            f"--scenarios={SCENARIO}",
+            env=self.env(STUB_FAIL_MATCH=turn["prompt"], STUB_FAIL_COST_USD="0.25"),
+        )
+        self.assertEqual(1, code, err)
+        shared = self.results / "r1" / "shared"
+        capture = shared / "scenarios" / SCENARIO / "baseline-1.jsonl"
+        self.assertFalse(run_round._captured(capture))
+        self.assertTrue(run_evals.failed_spend_path(capture).exists())
+        generated = self.COST * len(self.cases) * TRIALS * 2
+        self.assertAlmostEqual(generated + 0.25, self.meta("shared")["reported_costs"]["total_usd"])
+
+        code, _, err = self.run_cli(f"--scenarios={SCENARIO}", env=self.env())
+        self.assertEqual(0, code, err)
+        self.assertEqual(1, len(run_evals.read_jsonl(capture)))
+        turns = len(run_scenario_eval.load_scenario(ROOT / "evals/scenarios" / SCENARIO)["turns"])
+        expected = 0.25 + self.COST * turns * TRIALS * 2 + generated
+        costs = self.meta("shared")["reported_costs"]
+        # The re-captured row carries the failed attempt, so the ledger adds nothing more.
+        self.assertAlmostEqual(expected, costs["total_usd"])
+
+    def test_failed_judge_spend_is_in_the_variant_total(self):
+        code, _, _ = self.run_cli(
+            env=self.env(STUB_FAIL_MATCH="CRITERIA-2", STUB_FAIL_COST_USD="0.5")
+        )
+        self.assertEqual(1, code)
+        costs = self.meta()["reported_costs"]
+        # Each case-2 group failed once per judge at $0.50 (retries are 0).
+        self.assertGreaterEqual(costs["judges"]["stub-judge-a"]["usd"], 0.5 * TRIALS)
+        self.assertAlmostEqual(
+            costs["generation_usd"] + sum(j["usd"] for j in costs["judges"].values()),
+            costs["total_usd"],
+        )
+
+    def test_ledger_files_are_not_read_as_rows_and_shared_rows_copy_cleanly(self):
+        self.assertEqual(0, self.run_cli(env=self.env())[0])
+        shared = self.results / "r1" / "shared"
+        rows = shared / f"responses-t{TRIALS}.jsonl"
+        total = self.meta("shared")["reported_costs"]["total_usd"]
+        run_evals.record_failed_spend(
+            rows, {"case_id": "case-1", "trial": 1, "condition": "baseline", "runner": "stub"}, 0.5
+        )
+        # Settled: that key already has a row with a reported cost.
+        self.assertAlmostEqual(total, run_round._shared_costs(shared)["total_usd"])
+        run_evals.record_failed_spend(
+            rows, {"case_id": "ghost", "trial": 1, "condition": "comparator", "runner": "stub"}, 0.5
+        )
+        costs = run_round._shared_costs(shared)
+        self.assertAlmostEqual(total + 0.5, costs["total_usd"])
+        self.assertAlmostEqual(self.COST * len(self.cases) * TRIALS + 0.5, costs["generation_usd"]["comparator"])
+
+        code, _, err = self.run_cli(variant="c2=skill.md", env=self.env())
+        self.assertEqual(0, code, err)
+        self.assertEqual({"baseline", "comparator", "candidate"}, {r["condition"] for r in self.responses("c2")})
+        self.assertFalse(list((self.results / "r1" / "c2").glob("*.failed-spend")))
+        # Shared rows and their ledger stay out of the variant's own total.
+        self.assertAlmostEqual(self.COST * len(self.cases) * TRIALS * 3, self.meta("c2")["reported_costs"]["total_usd"])
+
     def test_rerunning_a_complete_round_spends_nothing(self):
         self.assertEqual(0, self.run_cli(env=self.env())[0])
         before = self.responses()

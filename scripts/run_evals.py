@@ -64,6 +64,44 @@ def load_cases(path: Path = DEFAULT_CASES) -> list[dict[str, Any]]:
     return read_jsonl(path)
 
 
+def _reported_cost(value: Any) -> Optional[float]:
+    """Return a usable dollar figure, or None when the cost is unknown."""
+    if type(value) in (int, float) and value >= 0 and math.isfinite(value):
+        return float(value)
+    return None
+
+
+def failed_spend_path(output: Path) -> Path:
+    # Not *.jsonl, so the globs that find response and score rows never match it.
+    return output.with_name(f"{output.name}.failed-spend")
+
+
+def record_failed_spend(output: Path, key: dict[str, Any], cost: float) -> None:
+    """Append one billed call now, so a killed process cannot lose what it spent."""
+    with failed_spend_path(output).open("a", encoding="utf-8") as ledger:
+        ledger.write(json.dumps({**key, "cost_usd": cost}) + "\n")
+
+
+def unsettled_failed_spend(output: Path) -> list[dict[str, Any]]:
+    """Ledger entries whose cost is not also on a row of `output`."""
+    path = failed_spend_path(output)
+    if not path.exists():
+        return []
+    entries = read_jsonl(path)
+    for entry in entries:
+        if _reported_cost(entry.get("cost_usd")) is None:
+            raise ValueError(f"{path}: cost_usd must be finite and non-negative")
+    rows = read_jsonl(output) if output.exists() else []
+    return [entry for entry in entries if not any(_row_settles(row, entry) for row in rows)]
+
+
+def _row_settles(row: dict[str, Any], entry: dict[str, Any]) -> bool:
+    # A row with a null cost carries none of the entry's spend, so the entry stays counted.
+    return _reported_cost(row.get("cost_usd", row.get("group_cost_usd"))) is not None and all(
+        row.get(field) == value for field, value in entry.items() if field != "cost_usd"
+    )
+
+
 def completed_keys(rows: list[dict[str, Any]]) -> set[tuple[str, int, str, str]]:
     keys: set[tuple[str, int, str, str]] = set()
     for row in rows:
@@ -377,6 +415,14 @@ def _attempt_failed(output: str, response_format: str) -> bool:
     return not _parse_response(output, response_format)[0]
 
 
+def attempt_cost(output: str, response_format: str) -> Optional[float]:
+    """The cost a failed attempt printed, or None when stdout does not carry one."""
+    try:
+        return _reported_cost(_parse_response(output, response_format)[2])
+    except (ValueError, AttributeError):
+        return None
+
+
 _INPUT_TOKEN_KEYS = (
     "input_tokens",
     "cache_creation_input_tokens",
@@ -426,6 +472,13 @@ def run_evaluations(args: argparse.Namespace) -> int:
         for row in prior_rows
         if row.get("condition") == args.condition and row.get("runner") == args.runner
     )
+    # Billed attempts that have no row yet, per key; the row takes them over when it lands.
+    failed_costs: dict[tuple[str, int, str, str], float] = defaultdict(float)
+    for entry in unsettled_failed_spend(args.output):
+        if entry["condition"] == args.condition and entry["runner"] == args.runner:
+            key = (entry["case_id"], entry["trial"], entry["condition"], entry["runner"])
+            failed_costs[key] += entry["cost_usd"]
+            reported_cost += entry["cost_usd"]
 
     if args.budget_usd <= 0 or args.budget_usd > 25:
         raise ValueError("--budget-usd must be greater than 0 and no more than 25")
@@ -441,6 +494,7 @@ def run_evaluations(args: argparse.Namespace) -> int:
                     print(f"skip completed {args.condition} trial {trial}: {case['id']}")
                     continue
                 prompt = _condition_prompt(case["prompt"], args.condition, args.condition_skill)
+                row_key = dict(zip(("case_id", "trial", "condition", "runner"), key))
                 completed = None
                 generated = False
                 for attempt in range(args.retries + 1):
@@ -463,11 +517,19 @@ def run_evaluations(args: argparse.Namespace) -> int:
                             stdin=subprocess.DEVNULL,
                         )
                     if completed.returncode == 0:
-                        text, usage, cost = _parse_response(completed.stdout, response_format)
-                        generated = not _attempt_failed(completed.stdout, response_format)
+                        try:
+                            text, usage, cost = _parse_response(completed.stdout, response_format)
+                            generated = not _attempt_failed(completed.stdout, response_format)
+                        except (ValueError, AttributeError):
+                            generated = False
                         if generated:
+                            cost = _reported_cost(cost)
                             break
-                        reported_cost += float(cost or 0)
+                    failed_cost = attempt_cost(completed.stdout, response_format)
+                    if failed_cost is not None:
+                        reported_cost += failed_cost
+                        failed_costs[key] += failed_cost
+                        record_failed_spend(args.output, row_key, failed_cost)
                     if attempt < args.retries:
                         time.sleep(min(2**attempt, 5))
                 assert completed is not None
@@ -477,7 +539,7 @@ def run_evaluations(args: argparse.Namespace) -> int:
                         try:
                             parsed_text, _, _ = _parse_response(completed.stdout, response_format)
                             detail = parsed_text or detail
-                        except (ValueError, json.JSONDecodeError):
+                        except (ValueError, AttributeError):
                             pass
                     raise RuntimeError(
                         f"Runner failed after {args.retries + 1} attempts "
@@ -491,13 +553,10 @@ def run_evaluations(args: argparse.Namespace) -> int:
                     )
                 reported_cost += float(cost or 0)
                 row = {
-                    "case_id": case["id"],
-                    "trial": trial,
-                    "condition": args.condition,
-                    "runner": args.runner,
+                    **row_key,
                     "response": text,
                     "usage": usage,
-                    "cost_usd": cost,
+                    "cost_usd": None if cost is None else cost + failed_costs[key],
                 }
                 destination.write(json.dumps(row, ensure_ascii=False) + "\n")
                 destination.flush()

@@ -164,7 +164,8 @@ class EvaluationHarnessTest(unittest.TestCase):
             output=root / "responses.jsonl",
         )
         completed = [
-            subprocess.CompletedProcess(["stub-runner"], 0, json.dumps(payload), "")
+            payload if isinstance(payload, subprocess.CompletedProcess)
+            else subprocess.CompletedProcess(["stub-runner"], 0, json.dumps(payload), "")
             for payload in responses
         ]
         with mock.patch.object(run_evals.subprocess, "run", side_effect=completed) as stub, (
@@ -235,6 +236,88 @@ class EvaluationHarnessTest(unittest.TestCase):
             self.assertEqual(2, code)
             self.assertEqual(1, len(self.calls))
             self.assertEqual([], run_evals.read_jsonl(root / "responses.jsonl"))
+
+    def test_row_carries_the_total_cost_of_its_failed_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._run_with_stubbed_cli(root, [
+                {"is_error": True, "result": "overloaded", "total_cost_usd": 5},
+                {"result": "102", "usage": {}, "total_cost_usd": 1},
+            ], budget_usd=10.0)
+
+            rows = run_evals.read_jsonl(root / "responses.jsonl")
+            self.assertEqual(6.0, rows[0]["cost_usd"])
+            # The row now holds that spend, so counting the ledger too would double it.
+            self.assertEqual([], run_evals.unsettled_failed_spend(root / "responses.jsonl"))
+
+    def test_nonzero_exit_cost_is_parsed_when_stdout_carries_it(self):
+        billed = subprocess.CompletedProcess(["x"], 1, '{"total_cost_usd": 0.4}', "boom")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(RuntimeError, r"\$0\.4000"):
+                self._run_with_stubbed_cli(root, [billed], retries=0)
+            self.assertEqual(
+                [0.4],
+                [e["cost_usd"] for e in run_evals.unsettled_failed_spend(root / "responses.jsonl")],
+            )
+
+    def test_nonzero_exit_without_json_stays_unknown_and_does_not_crash(self):
+        for stdout in ("crash: not json", "", "[1, 2]", '"text"'):
+            with self.subTest(stdout=stdout), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                failed = subprocess.CompletedProcess(["x"], 1, stdout, "boom")
+                with self.assertRaisesRegex(RuntimeError, "Runner failed after 1 attempts"):
+                    self._run_with_stubbed_cli(root, [failed], retries=0)
+                self.assertEqual([], run_evals.unsettled_failed_spend(root / "responses.jsonl"))
+
+    def test_failed_spend_counts_against_the_budget_on_resume(self):
+        billed = {"is_error": True, "result": "overloaded", "total_cost_usd": 0.75}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(RuntimeError):
+                self._run_with_stubbed_cli(root, [billed], retries=0)
+
+            self._run_with_stubbed_cli(
+                root, [{"result": "102", "usage": {}, "total_cost_usd": 0.1}],
+                retries=0, budget_flag="--max-budget-usd",
+            )
+            self.assertEqual("0.2500", self.calls[0][self.calls[0].index("--max-budget-usd") + 1])
+            rows = run_evals.read_jsonl(root / "responses.jsonl")
+            self.assertAlmostEqual(0.85, rows[0]["cost_usd"])
+
+    def test_failed_spend_from_another_condition_is_not_this_runs_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_evals.record_failed_spend(
+                root / "responses.jsonl",
+                {"case_id": "probe", "trial": 1, "condition": "comparator", "runner": "stub"},
+                0.9,
+            )
+            self._run_with_stubbed_cli(
+                root, [{"result": "102", "usage": {}, "total_cost_usd": 0.1}],
+                budget_flag="--max-budget-usd",
+            )
+            self.assertEqual("1.0000", self.calls[0][self.calls[0].index("--max-budget-usd") + 1])
+            self.assertAlmostEqual(0.1, run_evals.read_jsonl(root / "responses.jsonl")[0]["cost_usd"])
+
+    def test_empty_stdout_on_clean_exit_is_retried_then_raised(self):
+        empty = subprocess.CompletedProcess(["x"], 0, "", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(RuntimeError, "Runner failed after 2 attempts"):
+                self._run_with_stubbed_cli(root, [empty, empty])
+            self.assertEqual(2, len(self.calls))
+            self.assertEqual([], run_evals.read_jsonl(root / "responses.jsonl"))
+
+    def test_empty_stdout_recovers_on_retry(self):
+        empty = subprocess.CompletedProcess(["x"], 0, "", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code = self._run_with_stubbed_cli(
+                root, [empty, {"result": "102", "usage": {}, "total_cost_usd": 0.02}]
+            )
+            self.assertEqual(0, code)
+            self.assertEqual(["102"], [r["response"] for r in run_evals.read_jsonl(root / "responses.jsonl")])
 
     def test_empty_text_response_is_a_failed_generation(self):
         with tempfile.TemporaryDirectory() as tmp:

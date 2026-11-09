@@ -38,7 +38,9 @@ def load_scenario(directory: pathlib.Path) -> dict:
     return case
 
 
-def call_claude(command: list[str], workdir: str, spent: float) -> tuple[str, float]:
+def call_claude(
+    command: list[str], workdir: str, spent: float, record=lambda cost: None
+) -> tuple[str, float]:
     """Reject unusable responses while retaining all known reported costs."""
     try:
         result = subprocess.run(
@@ -70,6 +72,7 @@ def call_claude(command: list[str], workdir: str, spent: float) -> tuple[str, fl
             f"Claude returned invalid JSON or cost ({detail}); call cost unavailable; "
             f"reported so far: ${spent:.6f}"
         ) from exc
+    record(float(cost))
     response = payload.get("result")
     if result.returncode or run_evals.failed_generation(payload):
         detail = result.stderr.strip() or response or "missing response"
@@ -92,7 +95,11 @@ def run_scenario(args: argparse.Namespace) -> int:
         raise ValueError(f"{args.condition.capitalize()} skill cannot be empty")
 
     session_id = str(uuid.uuid4())
-    spent = 0.0
+    # The effort is part of the runner so `measure` refuses to compare across efforts.
+    runner = f"claude:{args.model}" + (f":{args.effort}" if args.effort else "")
+    key = {"case_id": case["id"], "trial": args.trial, "condition": args.condition, "runner": runner}
+    # No row exists until the last turn, so every paid turn goes on the ledger at once.
+    spent = sum(entry["cost_usd"] for entry in run_evals.unsettled_failed_spend(args.output))
     transcript = []
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with (
@@ -112,7 +119,9 @@ def run_scenario(args: argparse.Namespace) -> int:
                 "--max-budget-usd", f"{remaining:.6f}",
                 first_prompt if index == 0 else turn["prompt"],
             ]
-            response, cost = call_claude(command, workdir, spent)
+            response, cost = call_claude(
+                command, workdir, spent, lambda paid: run_evals.record_failed_spend(args.output, key, paid)
+            )
             spent += cost
             if spent > args.budget_usd:
                 raise RuntimeError(f"Budget exceeded; reported cost: ${spent:.6f}")
@@ -122,11 +131,7 @@ def run_scenario(args: argparse.Namespace) -> int:
                 "response": response,
             })
         row = {
-            "case_id": case["id"],
-            "trial": args.trial,
-            "condition": args.condition,
-            # The effort is part of the runner so `measure` refuses to compare across efforts.
-            "runner": f"claude:{args.model}" + (f":{args.effort}" if args.effort else ""),
+            **key,
             "session_id": session_id,
             "response": json.dumps(transcript, ensure_ascii=False),
             "cost_usd": spent,

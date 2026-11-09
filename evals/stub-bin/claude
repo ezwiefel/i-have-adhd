@@ -24,6 +24,8 @@ def main() -> int:
     fail_on = os.environ.get("STUB_FAIL_MATCH")
     if fail_on and fail_on in " ".join(sys.argv[1:]) + sys.stdin.read():
         print(os.environ.get("STUB_FAIL_MESSAGE", "stub failure"), file=sys.stderr)
+        if os.environ.get("STUB_FAIL_COST_USD"):
+            print(json.dumps({"is_error": True, "total_cost_usd": float(os.environ["STUB_FAIL_COST_USD"])}))
         return 1
     verdict = {
         "correctness": 4, "autonomy": 4, "actionability": 4, "safety": 5, "concision": 4,

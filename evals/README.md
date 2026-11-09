@@ -36,7 +36,7 @@ All example runners isolate the call from the operator's own agent configuration
 
 Isolation also drops the operator's saved model and effort settings, so the claude runner pins `--model` explicitly. Keep a pin when editing the runner: without one, the eval silently runs whatever the operator (or the CLI release) defaults to; the model would vary between operators and over time, and per-token cost varies with it. The pinned model is part of the result: record it with published numbers, as below.
 
-Runs are resumable: rerun the same command after a provider failure and completed `(case, trial, condition, runner)` rows are skipped. Each incomplete call is retried twice by default, and the final provider error is preserved. A call that exits cleanly but reports `is_error`, an `error*` subtype, or an empty result counts as incomplete and is never written as a row. Its reported cost still counts against the budget for that run, but is not carried over when you resume.
+Runs are resumable: rerun the same command after a provider failure and completed `(case, trial, condition, runner)` rows are skipped. Each incomplete call is retried twice by default, and the final provider error is preserved. A call that exits cleanly but reports `is_error`, an `error*` subtype, or an empty result counts as incomplete and is never written as a row. Any reported cost from a failed attempt, including one that exits non-zero with `total_cost_usd` on stdout, is appended to `<output>.failed-spend` as soon as it is known, so it survives a killed process and counts against the budget on resume. The row for that key carries the attempts' total once it lands; costs that never reach a row stay in the ledger, and a failed attempt with no parseable cost remains unknown and adds nothing.
 
 ## Measure
 
@@ -63,7 +63,7 @@ Claude input totals include cache creation/read tokens; Codex cached input is
 already part of its input count and is not added again.
 
 This measures recorded generation rows, not total provider billing: judge costs
-and unrecorded failed/retried calls are excluded. Scenario captures currently omit
+and failed calls that never reached a row (see `<output>.failed-spend`) are excluded. Scenario captures currently omit
 token usage, and their response length includes transcript JSON and user prompts.
 The command is read-only and makes no model calls.
 
@@ -125,8 +125,10 @@ maximum, and the remaining budget goes to any runner with a `budget_flag`. When
 reported cost reaches the cap, the judge stops between groups with exit code 2,
 and everything already judged stays in the output file. Each group's reported
 cost is stored on its score rows as `group_cost_usd`, so a resumed run counts it.
-Reported cost from a group that ends up skipped counts against that run only,
-and is not carried over when you resume.
+Reported cost from a malformed reply or a failed runner call is appended to
+`<output>.failed-spend`, so a resumed run counts that too; a group that later
+succeeds carries those attempts in its `group_cost_usd` and the ledger stops
+counting them.
 
 Unknown cost is not zero cost. A runner that reports no cost needs
 `--allow-unmetered`: without it the judge stops at the first null cost, keeping
@@ -216,8 +218,8 @@ the work left to do, and refuses to reach $120. A results folder with a missing 
 malformed `meta.json` has unknown spend, so it also refuses until that folder is repaired
 or removed. `reported_costs.total_usd` covers the folder's own spend; `shared/meta.json`
 holds the shared rows, so each dollar is counted once. Costs are read back from the rows,
-so a resume includes earlier spend. A failed attempt that left no row is not counted,
-as elsewhere in the harness. A judge named in `--unmetered-judges` records `null` costs
+so a resume includes earlier spend, and `*.failed-spend` ledgers add attempts that left
+no row. A judge named in `--unmetered-judges` records `null` costs
 and adds no cap.
 
 `evals/runners.stub.json` runs the same pipeline against canned JSON at $0. Copy it into

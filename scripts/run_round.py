@@ -235,10 +235,31 @@ def _usd(rows: list[dict[str, Any]], field: str = "cost_usd") -> float:
     return round(sum(judge._reported_cost(row.get(field)) or 0.0 for row in rows), 6)
 
 
+def _failed_usd(directory: Path, pattern: str, condition: Optional[str] = None) -> float:
+    """Billed attempts under `pattern` that no row carries yet."""
+    entries = [
+        entry
+        for ledger in directory.glob(f"{pattern}.failed-spend")
+        for entry in run_evals.unsettled_failed_spend(ledger.with_suffix(""))
+    ]
+    return sum(e["cost_usd"] for e in entries if condition in (None, e.get("condition")))
+
+
 def _shared_costs(directory: Path) -> dict[str, Any]:
     rows = [row for path in sorted(directory.glob("responses-t*.jsonl")) for row in _rows(path)]
-    generation = {c: _usd([r for r in rows if r.get("condition") == c]) for c in SHARED_CONDITIONS}
-    scenarios = _usd([r for p in directory.glob("scenarios/*/*.jsonl") for r in _rows(p)])
+    generation = {
+        c: round(
+            _usd([r for r in rows if r.get("condition") == c])
+            + _failed_usd(directory, "responses-t*.jsonl", c),
+            6,
+        )
+        for c in SHARED_CONDITIONS
+    }
+    scenarios = round(
+        _usd([r for p in directory.glob("scenarios/*/*.jsonl") for r in _rows(p)])
+        + _failed_usd(directory, "scenarios/*/*.jsonl"),
+        6,
+    )
     return {
         "generation_usd": generation,
         "scenarios_usd": scenarios,
@@ -249,9 +270,17 @@ def _shared_costs(directory: Path) -> dict[str, Any]:
 def _variant_costs(directory: Path) -> dict[str, Any]:
     """This folder's own spend. Shared rows are counted once, in shared/meta.json."""
     rows = _rows(directory / "responses.jsonl")
-    generation = _usd([row for row in rows if row.get("condition") == "candidate"])
+    generation = round(
+        _usd([row for row in rows if row.get("condition") == "candidate"])
+        + _failed_usd(directory, "responses.jsonl"),
+        6,
+    )
     captures = directory.glob("scenarios/*/candidate-*.jsonl")
-    scenarios = _usd([row for path in captures for row in _rows(path)])
+    scenarios = round(
+        _usd([row for path in captures for row in _rows(path)])
+        + _failed_usd(directory, "scenarios/*/candidate-*.jsonl"),
+        6,
+    )
     judges: dict[str, dict[str, Any]] = {}
     for path in [*directory.glob("scores-*.jsonl"), *directory.glob("scenarios/*/scores-*.jsonl")]:
         name = path.stem.removeprefix("scores-")
@@ -259,7 +288,10 @@ def _variant_costs(directory: Path) -> dict[str, Any]:
         # Every row of a group repeats the group's cost.
         groups = {(row["case_id"], row["trial"]): row.get("group_cost_usd") for row in _rows(path)}
         known = [judge._reported_cost(cost) for cost in groups.values()]
-        entry["usd"] = round(entry["usd"] + sum(cost for cost in known if cost is not None), 6)
+        failed = _failed_usd(path.parent, path.name)
+        entry["usd"] = round(
+            entry["usd"] + sum(cost for cost in known if cost is not None) + failed, 6
+        )
         entry["unreported_groups"] += known.count(None)
     total = generation + scenarios + sum(entry["usd"] for entry in judges.values())
     return {

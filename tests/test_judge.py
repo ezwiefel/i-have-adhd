@@ -664,6 +664,95 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(2, len(self.call_log()))
         self.assertFalse(run_evals.read_jsonl(self.output))
 
+    def write_script(self, body):
+        """A runner that drains stdin, logs the call, then runs `body` in sh."""
+        runner = {
+            "command": ["sh", "-c", f'cat > /dev/null; echo call >> "{self.calls}"; {body}', "sh"],
+            "response_format": "claude-json",
+        }
+        self.runner_config = self.tmp / "runners.json"
+        self.runner_config.write_text(json.dumps({"stub": runner}))
+
+    def ledger(self):
+        return [entry["cost_usd"] for entry in run_evals.unsettled_failed_spend(self.output)]
+
+    def test_malformed_replies_stay_on_the_ledger_across_a_resume(self):
+        self.write_inputs(("one",))
+        self.write_runner(3, result="not json")
+
+        code, _ = self.judge_quietly("--budget-usd", "10")
+        self.assertEqual(1, code)
+        self.assertEqual(3, len(self.call_log()))
+        self.assertEqual([3.0, 3.0, 3.0], self.ledger())
+
+        # $9 carried over, so a single further $3 attempt reaches the $10 cap.
+        code, stderr = self.judge_quietly("--budget-usd", "10")
+        self.assertEqual(1, code, stderr)
+        self.assertEqual(4, len(self.call_log()))
+        self.assertEqual([3.0] * 4, self.ledger())
+
+    def test_a_group_that_succeeds_after_billed_failures_counts_them_once(self):
+        self.write_inputs(("one",))
+        self.write_runner(0.5, result="not json")
+        self.judge_quietly("--retries", "1")
+        self.assertEqual([0.5, 0.5], self.ledger())
+
+        self.write_runner(0.5, budget_flag="--max-budget-usd")
+        code, _ = self.judge_quietly("--budget-usd", "10", "--retries", "1")
+        self.assertEqual(0, code)
+        self.assertEqual("--max-budget-usd 9.0000", self.call_log()[-1])
+        scores = run_evals.read_jsonl(self.output)
+        self.assertEqual([1.5, 1.5], [row["group_cost_usd"] for row in scores])
+        self.assertEqual([], self.ledger())
+
+    def test_nonzero_exit_with_a_cost_on_stdout_reaches_the_ledger(self):
+        self.write_inputs(("one",))
+        self.write_script("""echo '{"total_cost_usd": 0.25}'; exit 1""")
+
+        code, _ = self.judge_quietly("--retries", "1")
+
+        self.assertEqual(1, code)
+        self.assertEqual(2, len(self.call_log()))
+        self.assertEqual([0.25, 0.25], self.ledger())
+
+    def test_retries_after_a_billed_exit_get_the_remaining_budget(self):
+        self.write_inputs(("one",))
+        reply = self.tmp / "reply.json"
+        reply.write_text('{"total_cost_usd": 0.4}')
+        runner = {
+            "command": ["sh", "-c", f'cat > /dev/null; echo "$*" >> "{self.calls}"; cat "{reply}"; exit 1', "sh"],
+            "response_format": "claude-json", "budget_flag": "--max-budget-usd",
+        }
+        self.runner_config = self.tmp / "runners.json"
+        self.runner_config.write_text(json.dumps({"stub": runner}))
+
+        code, _ = self.judge_quietly("--budget-usd", "1", "--retries", "5")
+
+        self.assertEqual(
+            ["--max-budget-usd 1.0000", "--max-budget-usd 0.6000", "--max-budget-usd 0.2000"],
+            self.call_log(),
+        )
+        self.assertEqual(1, code)
+
+    def test_nonzero_exit_without_json_is_unknown_not_a_crash(self):
+        self.write_inputs(("one",))
+        self.write_script("echo crash; exit 1")
+
+        code, _ = self.judge_quietly("--retries", "0")
+
+        self.assertEqual(1, code)
+        self.assertEqual([], self.ledger())
+
+    def test_empty_stdout_on_clean_exit_is_retried_then_skipped(self):
+        self.write_inputs(("one",))
+        self.write_script("exit 0")
+
+        code, stderr = self.judge_quietly("--retries", "1")
+
+        self.assertEqual(1, code)
+        self.assertEqual(2, len(self.call_log()))
+        self.assertIn("failed after 2 attempts", stderr)
+
     def test_budget_outside_the_allowed_range_is_rejected(self):
         self.write_runner(0.1)
         for value in ("0", "-1", "26", "nan"):

@@ -177,6 +177,41 @@ class ScenarioEvaluationTest(unittest.TestCase):
                 self.assertEqual([], run_evals.read_jsonl(self.args.output))
 
     @mock.patch("run_scenario_eval.subprocess.run")
+    def test_failed_capture_spend_survives_and_is_counted_on_resume(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, '{"result":"ok","total_cost_usd":0.2}', ""),
+            subprocess.CompletedProcess([], 1, '{"is_error":true,"result":"x","total_cost_usd":0.3}', ""),
+        ]
+        with self.assertRaises(RuntimeError):
+            self.run_capture()
+        self.assertEqual(
+            [0.2, 0.3], [e["cost_usd"] for e in run_evals.unsettled_failed_spend(self.args.output)]
+        )
+
+        # run_round removes the empty capture before retrying it.
+        self.args.output.unlink()
+        run.side_effect = None
+        run.reset_mock()
+        run.return_value = subprocess.CompletedProcess([], 0, '{"result":"ok","total_cost_usd":0.01}', "")
+        row = self.run_capture()
+        self.assertEqual("0.500000", run.call_args_list[0].args[0][-2])
+        # Six turns at $0.01 plus the earlier failure, on the row and only there.
+        self.assertAlmostEqual(0.56, row["cost_usd"])
+        self.assertEqual([], run_evals.unsettled_failed_spend(self.args.output))
+
+    @mock.patch("run_scenario_eval.subprocess.run")
+    def test_kill_between_turns_leaves_paid_turns_on_the_ledger(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, '{"result":"ok","total_cost_usd":0.2}', ""),
+            KeyboardInterrupt(),
+        ]
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_capture()
+        self.assertEqual(
+            [0.2], [e["cost_usd"] for e in run_evals.unsettled_failed_spend(self.args.output)]
+        )
+
+    @mock.patch("run_scenario_eval.subprocess.run")
     def test_invalid_costs_and_payloads_fail_closed(self, run):
         payloads = [[], None, "error"] + [
             {"result": "ok", "total_cost_usd": cost}

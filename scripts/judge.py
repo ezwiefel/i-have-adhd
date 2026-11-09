@@ -4,7 +4,6 @@
 import argparse
 import hashlib
 import json
-import math
 import subprocess
 import sys
 import time
@@ -174,7 +173,12 @@ def assign_labels(group_key: tuple, conditions: list[str]) -> dict[str, str]:
 
 
 def invoke_judge(
-    command: list[str], response_format: str, prompt: str, retries: int
+    command: list[str],
+    response_format: str,
+    prompt: str,
+    retries: int,
+    budget: Optional["_Budget"] = None,
+    group_key: Optional[tuple] = None,
 ) -> tuple[str, Optional[float]]:
     """Run the judge runner once, retrying transient failures.
 
@@ -185,9 +189,13 @@ def invoke_judge(
     """
     completed = None
     for attempt in range(retries + 1):
+        # A failed attempt can bill, so each retry re-checks the cap and gets what is left.
+        stop = budget.stop_reason() if attempt and budget else None
+        if stop:
+            raise RuntimeError(stop)
         with run_evals._neutral_cwd() as cwd:
             completed = subprocess.run(
-                list(command),
+                [*command, *(budget.flags() if budget else [])],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -195,39 +203,55 @@ def invoke_judge(
                 cwd=cwd,
             )
         if completed.returncode == 0:
-            break
+            try:
+                text, _, cost = run_evals._parse_response(completed.stdout, response_format)
+                return text, cost
+            except (ValueError, AttributeError):
+                pass
+        failed_cost = run_evals.attempt_cost(completed.stdout, response_format)
+        if budget and failed_cost is not None:
+            budget.failed_attempt(group_key, failed_cost)
         if attempt < retries:
             time.sleep(min(2**attempt, 5))
     assert completed is not None
-    if completed.returncode:
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        raise RuntimeError(f"Judge runner failed after {retries + 1} attempts:\n{detail}")
-    text, _, cost = run_evals._parse_response(completed.stdout, response_format)
-    return text, cost
+    detail = completed.stderr.strip() or completed.stdout.strip() or "empty response"
+    raise RuntimeError(f"Judge runner failed after {retries + 1} attempts:\n{detail}")
 
 
-def _reported_cost(value: Any) -> Optional[float]:
-    """Return a usable dollar figure, or None when the cost is unknown."""
-    if type(value) in (int, float) and value >= 0 and math.isfinite(value):
-        return float(value)
-    return None
+_reported_cost = run_evals._reported_cost
 
 
 class _Budget:
     """Reported judge spend against the cap, across resumes and failed attempts."""
 
-    def __init__(self, cap: float, allow_unmetered: bool, flag: Optional[str]) -> None:
+    def __init__(
+        self, cap: float, allow_unmetered: bool, flag: Optional[str], output: Path
+    ) -> None:
         self.cap = cap
         self.allow_unmetered = allow_unmetered
         self.flag = flag
+        self.output = output
         self.spent = 0.0
         self.unknown = False
+        self.failed: dict[tuple, float] = defaultdict(float)
+        for entry in run_evals.unsettled_failed_spend(output):
+            self.spent += entry["cost_usd"]
+            self.failed[(entry["case_id"], entry["trial"])] += entry["cost_usd"]
 
     def add(self, cost: Optional[float]) -> None:
         if cost is None:
             self.unknown = True
         else:
             self.spent += cost
+
+    def failed_attempt(self, group_key: tuple, cost: Optional[float]) -> None:
+        """Count an attempt that leaves no score row, and persist it for a resume."""
+        self.add(cost)
+        if cost is not None:
+            self.failed[group_key] += cost
+            run_evals.record_failed_spend(
+                self.output, {"case_id": group_key[0], "trial": group_key[1]}, cost
+            )
 
     def flags(self) -> list[str]:
         """Return the runner arguments that pass on the remaining budget."""
@@ -262,23 +286,24 @@ def _judge_group(
     Returns the group's total reported cost, or None if any attempt's is unknown.
     """
     last_error: Optional[ValueError] = None
-    costs: list[Optional[float]] = []
+    unreported = False
     for attempt in range(retries + 1):
         if attempt:
             # A malformed reply can still bill, so re-check before paying again.
             if budget.stop_reason():
                 break
             time.sleep(min(2 ** (attempt - 1), 5))
-        text, raw_cost = invoke_judge([*command, *budget.flags()], response_format, prompt, retries)
+        text, raw_cost = invoke_judge(command, response_format, prompt, retries, budget, group_key)
         cost = _reported_cost(raw_cost)
-        budget.add(cost)
-        costs.append(cost)
         try:
             rows = parse_judge_scores(text, group_key, labels)
         except ValueError as exc:
             last_error = exc
+            budget.failed_attempt(group_key, cost)
+            unreported = unreported or cost is None
             continue
-        return rows, None if None in costs else sum(costs)
+        budget.add(cost)
+        return rows, None if unreported or cost is None else cost + budget.failed[group_key]
     assert last_error is not None
     raise last_error
 
@@ -353,7 +378,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"The {response_format!r} response format never reports dollar cost; {UNMETERED_ADVICE}"
         )
 
-    budget = _Budget(args.budget_usd, args.allow_unmetered, runner.get("budget_flag"))
+    budget = _Budget(args.budget_usd, args.allow_unmetered, runner.get("budget_flag"), args.output)
     # Every row of a group repeats the group's cost, so count each group once.
     earlier = {(row["case_id"], row["trial"]): row.get("group_cost_usd") for row in existing}
     for cost in earlier.values():
