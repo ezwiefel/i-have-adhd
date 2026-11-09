@@ -71,13 +71,7 @@ def call_claude(command: list[str], workdir: str, spent: float) -> tuple[str, fl
             f"reported so far: ${spent:.6f}"
         ) from exc
     response = payload.get("result")
-    if (
-        result.returncode
-        or payload.get("is_error")
-        or str(payload.get("subtype", "")).startswith("error")
-        or not isinstance(response, str)
-        or not response.strip()
-    ):
+    if result.returncode or run_evals.failed_generation(payload):
         detail = result.stderr.strip() or response or "missing response"
         raise RuntimeError(
             f"Claude failed: {detail}; cumulative reported cost: ${spent + cost:.6f}"

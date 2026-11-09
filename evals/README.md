@@ -36,7 +36,7 @@ Both example runners isolate the call from the operator's own agent configuratio
 
 Isolation also drops the operator's saved model and effort settings, so the claude runner pins `--model` explicitly. Keep a pin when editing the runner: without one, the eval silently runs whatever the operator (or the CLI release) defaults to; the model would vary between operators and over time, and per-token cost varies with it. The pinned model is part of the result: record it with published numbers, as below.
 
-Runs are resumable: rerun the same command after a provider failure and completed `(case, trial, condition, runner)` rows are skipped. Each incomplete call is retried twice by default, and the final provider error is preserved.
+Runs are resumable: rerun the same command after a provider failure and completed `(case, trial, condition, runner)` rows are skipped. Each incomplete call is retried twice by default, and the final provider error is preserved. A call that exits cleanly but reports `is_error`, an `error*` subtype, or an empty result counts as incomplete and is never written as a row. Its reported cost still counts against the budget for that run, but is not carried over when you resume.
 
 ## Measure
 

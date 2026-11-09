@@ -96,6 +96,143 @@ class EvaluationHarnessTest(unittest.TestCase):
             self.assertEqual(1, runner.call_count)
             self.assertIs(subprocess.DEVNULL, runner.call_args.kwargs.get("stdin"))
 
+    def _run_with_stubbed_cli(self, root, responses, retries=1, budget_usd=1.0, budget_flag=None):
+        """Run one baseline case with each CLI call returning the next stubbed payload."""
+        cases = root / "cases.jsonl"
+        cases.write_text(
+            json.dumps(
+                {
+                    "id": "probe",
+                    "category": "direct-answer",
+                    "prompt": "What is 17 multiplied by 6?",
+                    "risk": "low",
+                    "criteria": ["Answers 102."],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        runner = {"command": ["stub-runner"], "response_format": "claude-json"}
+        if budget_flag:
+            runner["budget_flag"] = budget_flag
+        runners = root / "runners.json"
+        runners.write_text(json.dumps({"stub": runner}), encoding="utf-8")
+        args = argparse.Namespace(
+            cases=cases,
+            runner_config=runners,
+            runner="stub",
+            condition="baseline",
+            condition_skill=None,
+            case=None,
+            trials=1,
+            retries=retries,
+            budget_usd=budget_usd,
+            allow_unmetered=False,
+            output=root / "responses.jsonl",
+        )
+        completed = [
+            subprocess.CompletedProcess(["stub-runner"], 0, json.dumps(payload), "")
+            for payload in responses
+        ]
+        with mock.patch.object(run_evals.subprocess, "run", side_effect=completed) as stub, (
+            mock.patch.object(run_evals.time, "sleep")
+        ):
+            try:
+                return run_evals.run_evaluations(args)
+            finally:
+                self.calls = [call.args[0] for call in stub.call_args_list]
+
+    def test_failed_generation_is_retried_then_raised_with_no_completed_row(self):
+        failures = {
+            "is_error": {"is_error": True, "result": "overloaded", "total_cost_usd": 0.01},
+            "error subtype": {
+                "subtype": "error_max_turns", "result": "overloaded", "total_cost_usd": 0.01,
+            },
+            "empty": {"result": "", "total_cost_usd": 0.01},
+            "whitespace": {"result": " \n", "total_cost_usd": 0.01},
+            "null": {"result": None, "total_cost_usd": 0.01},
+            "missing": {"total_cost_usd": 0.01},
+        }
+        for name, payload in failures.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with self.assertRaisesRegex(RuntimeError, "Runner failed after 2 attempts"):
+                    self._run_with_stubbed_cli(root, [payload, payload])
+
+                self.assertEqual(2, len(self.calls))
+                self.assertEqual(set(), run_evals.completed_keys(
+                    run_evals.read_jsonl(root / "responses.jsonl")))
+
+    def test_failed_generation_error_reports_provider_text_and_cost(self):
+        payload = {"is_error": True, "result": "overloaded", "total_cost_usd": 0.01}
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, r"(?s)overloaded.*\$0\.0200"):
+                self._run_with_stubbed_cli(Path(tmp), [payload, payload])
+
+    def test_retry_after_failed_generation_records_only_the_good_response(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code = self._run_with_stubbed_cli(root, [
+                {"is_error": True, "result": "overloaded", "total_cost_usd": 0.01},
+                {"result": "102", "usage": {}, "total_cost_usd": 0.02},
+            ])
+
+            rows = run_evals.read_jsonl(root / "responses.jsonl")
+            self.assertEqual(0, code)
+            self.assertEqual(["102"], [row["response"] for row in rows])
+
+    def test_failed_generation_cost_counts_against_the_budget(self):
+        """A failed attempt can still bill, so a retry only gets what is left."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_with_stubbed_cli(Path(tmp), [
+                {"is_error": True, "result": "overloaded", "total_cost_usd": 0.25},
+                {"result": "102", "usage": {}, "total_cost_usd": 0.02},
+            ], budget_flag="--max-budget-usd")
+
+        self.assertEqual("1.0000", self.calls[0][self.calls[0].index("--max-budget-usd") + 1])
+        self.assertEqual("0.7500", self.calls[1][self.calls[1].index("--max-budget-usd") + 1])
+
+    def test_failed_generation_stops_retrying_when_budget_is_spent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code = self._run_with_stubbed_cli(root, [
+                {"is_error": True, "result": "overloaded", "total_cost_usd": 1.0},
+            ])
+
+            self.assertEqual(2, code)
+            self.assertEqual(1, len(self.calls))
+            self.assertEqual([], run_evals.read_jsonl(root / "responses.jsonl"))
+
+    def test_empty_text_response_is_a_failed_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runners = root / "runners.json"
+            runners.write_text(
+                json.dumps({"stub": {"command": ["stub-runner"], "response_format": "text"}}),
+                encoding="utf-8",
+            )
+            output = root / "out.jsonl"
+            args = argparse.Namespace(
+                cases=ROOT / "evals" / "cases.jsonl",
+                runner_config=runners,
+                runner="stub",
+                condition="baseline",
+                condition_skill=None,
+                case=["direct-answer"],
+                trials=1,
+                retries=0,
+                budget_usd=1.0,
+                allow_unmetered=True,
+                output=output,
+            )
+            empty = subprocess.CompletedProcess(["stub-runner"], 0, "\n", "")
+
+            with mock.patch.object(run_evals.subprocess, "run", return_value=empty):
+                with self.assertRaisesRegex(RuntimeError, "empty response"):
+                    run_evals.run_evaluations(args)
+
+            self.assertEqual([], run_evals.read_jsonl(output))
+
     def test_score_summary_applies_weights_and_release_gates(self):
         scores = []
         for condition, value in (("baseline", 3), ("candidate", 4)):

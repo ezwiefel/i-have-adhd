@@ -355,6 +355,23 @@ def _parse_response(
     raise ValueError(f"Unsupported response format: {response_format}")
 
 
+def failed_generation(payload: dict[str, Any]) -> bool:
+    """A CLI can exit 0 and still report an error or return nothing usable."""
+    response = payload.get("result")
+    return bool(
+        payload.get("is_error")
+        or str(payload.get("subtype", "")).startswith("error")
+        or not isinstance(response, str)
+        or not response.strip()
+    )
+
+
+def _attempt_failed(output: str, response_format: str) -> bool:
+    if response_format == "claude-json":
+        return failed_generation(json.JSONDecoder().raw_decode(output.lstrip())[0])
+    return not _parse_response(output, response_format)[0]
+
+
 _INPUT_TOKEN_KEYS = (
     "input_tokens",
     "cache_creation_input_tokens",
@@ -418,17 +435,19 @@ def run_evaluations(args: argparse.Namespace) -> int:
                 if key in done:
                     print(f"skip completed {args.condition} trial {trial}: {case['id']}")
                     continue
-                remaining = args.budget_usd - reported_cost
-                if remaining <= 0:
-                    print("Budget exhausted; stopping.", file=sys.stderr)
-                    return 2
                 prompt = _condition_prompt(case["prompt"], args.condition, args.condition_skill)
-                invocation = [*command]
-                if runner.get("budget_flag"):
-                    invocation.extend([runner["budget_flag"], f"{remaining:.4f}"])
-                invocation.append(prompt)
                 completed = None
+                generated = False
                 for attempt in range(args.retries + 1):
+                    # Inside the loop because a failed attempt can still bill.
+                    remaining = args.budget_usd - reported_cost
+                    if remaining <= 0:
+                        print("Budget exhausted; stopping.", file=sys.stderr)
+                        return 2
+                    invocation = [*command]
+                    if runner.get("budget_flag"):
+                        invocation.extend([runner["budget_flag"], f"{remaining:.4f}"])
+                    invocation.append(prompt)
                     with _neutral_cwd() as cwd:
                         completed = subprocess.run(
                             invocation,
@@ -439,12 +458,16 @@ def run_evaluations(args: argparse.Namespace) -> int:
                             stdin=subprocess.DEVNULL,
                         )
                     if completed.returncode == 0:
-                        break
+                        text, usage, cost = _parse_response(completed.stdout, response_format)
+                        generated = not _attempt_failed(completed.stdout, response_format)
+                        if generated:
+                            break
+                        reported_cost += float(cost or 0)
                     if attempt < args.retries:
                         time.sleep(min(2**attempt, 5))
                 assert completed is not None
-                if completed.returncode:
-                    detail = completed.stderr.strip() or completed.stdout.strip()
+                if not generated:
+                    detail = completed.stderr.strip() or completed.stdout.strip() or "empty response"
                     if completed.stdout.strip():
                         try:
                             parsed_text, _, _ = _parse_response(completed.stdout, response_format)
@@ -453,9 +476,9 @@ def run_evaluations(args: argparse.Namespace) -> int:
                             pass
                     raise RuntimeError(
                         f"Runner failed after {args.retries + 1} attempts "
-                        f"({shlex.join(invocation[:-1])}):\n{detail}"
+                        f"({shlex.join(invocation[:-1])}):\n{detail}\n"
+                        f"Reported cost so far: ${reported_cost:.4f}"
                     )
-                text, usage, cost = _parse_response(completed.stdout, response_format)
                 if cost is None and not args.allow_unmetered:
                     raise RuntimeError(
                         "Runner did not report dollar cost; rerun with --allow-unmetered only when "
