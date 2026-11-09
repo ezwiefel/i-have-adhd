@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -255,6 +256,51 @@ class EndToEndTest(unittest.TestCase):
             self.assertIn("Great question! The answer is 102.", prompt)
             self.assertNotIn("baseline", prompt.lower())
             self.assertNotIn("candidate", prompt.lower())
+
+    def test_root_token_in_a_runner_command_expands_to_the_repo_root(self):
+        # Runners start in an empty temp directory, so a relative script path
+        # would not resolve.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "verdict.json").write_text(json.dumps({"A": self.VERDICT, "B": self.VERDICT}))
+            (tmp_path / "runner.sh").write_text(f'cat > /dev/null; cat "{tmp_path}/verdict.json"\n')
+            responses = tmp_path / "responses.jsonl"
+            responses.write_text(
+                "".join(
+                    json.dumps(
+                        {
+                            "case_id": "direct-answer",
+                            "trial": 1,
+                            "condition": condition,
+                            "runner": "stub",
+                            "response": "102",
+                        }
+                    )
+                    + "\n"
+                    for condition in ("baseline", "candidate")
+                )
+            )
+            runner_config = tmp_path / "runners.json"
+            runner_config.write_text(
+                json.dumps({"stub": {"command": ["sh", "{root}/runner.sh"], "response_format": "text"}})
+            )
+            output = tmp_path / "scores.jsonl"
+
+            with mock.patch.object(judge, "ROOT", tmp_path):
+                exit_code = judge.main(
+                    [
+                        "--responses", str(responses),
+                        "--cases", str(ROOT / "evals" / "cases.jsonl"),
+                        "--rubric", str(ROOT / "evals" / "rubric.md"),
+                        "--runner-config", str(runner_config),
+                        "--runner", "stub",
+                        "--retries", "0",
+                        "--output", str(output),
+                    ]
+                )
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual(2, len(run_evals.read_jsonl(output)))
 
     def test_a_malformed_verdict_skips_its_group_instead_of_killing_the_run(self):
         # One bad grader response must not discard the groups already judged

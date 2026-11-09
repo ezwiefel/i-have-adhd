@@ -286,7 +286,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     config = json.loads(args.runner_config.read_text(encoding="utf-8"))
     runner = config[args.runner]
-    command = list(runner["command"])
+    # Runners start in an empty temp directory, so repo paths must be absolute.
+    command = [part.replace("{root}", str(ROOT)) for part in runner["command"]]
     response_format = runner.get("response_format", "text")
 
     total_cost = 0.0

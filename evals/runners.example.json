@@ -57,6 +57,13 @@
     "response_format": "claude-json",
     "budget_flag": "--max-budget-usd"
   },
+  "gemini-3-8-flash": {
+    "command": [
+      "python3",
+      "{root}/scripts/runners/gemini_judge.py"
+    ],
+    "response_format": "claude-json"
+  },
   "codex": {
     "command": [
       "codex",

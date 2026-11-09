@@ -86,6 +86,13 @@ built, and the label order is permuted per group, so position carries no signal.
 The permutation comes from a digest of the group key rather than a random
 source, so a resumed run reproduces the labels it used the first time.
 
+For a cross-family judge, use `--runner gemini-3-8-flash` with `GEMINI_API_KEY`
+set. The runner waits out 429 responses for about two minutes before failing.
+Free-tier prompts may be used to improve Google's products, so do not send
+cases you need to keep private. In a runner's `command`, `{root}` expands to the
+repository root, because runners start in an empty temporary directory. Only
+`judge.py` expands it.
+
 Only the region of `rubric.md` between the `<!-- judge:begin -->` and
 `<!-- judge:end -->` markers reaches the grader. The release-gate rules below
 those markers name the conditions, and sending them to a blind grader would
