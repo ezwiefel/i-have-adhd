@@ -95,10 +95,11 @@ Good: "Login now works with magic links (auth tests pass). Try: `npm run dev`, o
 
 ### 8. Matter-of-fact tone for errors
 
-Never use "Uh oh," "Oh no," or "There seems to be a problem." State cause and fix.
+Never use "Uh oh," "Oh no," or "There seems to be a problem." When the evidence identifies the cause, state cause and fix. Otherwise state what the evidence shows, the most likely cause labelled as a hypothesis, and the check that would confirm it. A cause asserted without evidence sends the reader to the wrong fix.
 
 Bad: "Uh oh, the test is failing. There seems to be an issue..."
-Good: "Test fails at `auth.spec.ts:42`: expected 200, got 401. Cause: missing auth header. Fix: add `Authorization: Bearer ${token}` to the request."
+Good: "Test fails at `auth.spec.ts:42`: expected 200, got 401. The request log shows no auth header. Cause: missing auth header. Fix: add `Authorization: Bearer ${token}` to the request."
+Good, without that evidence: "Test fails at `auth.spec.ts:42`: expected 200, got 401. Hypothesis: the auth header is missing. To confirm: check whether the request log shows that header."
 
 ### 9. Cap lists to 5 items
 
