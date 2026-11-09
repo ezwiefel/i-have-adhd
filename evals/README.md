@@ -148,4 +148,17 @@ python3 scripts/run_evals.py score evals/results/scores.jsonl
 
 Both `score` and `measure` need `baseline` plus at least one other condition. With no `candidate` rows there is nothing to gate, so `score` reports `release_gate` as `null`.
 
+To see where two judges differ on the same responses:
+
+```bash
+python3 scripts/judge_agreement.py evals/results/scores-a.jsonl evals/results/scores-b.jsonl
+```
+
+The JSON gives each shared `(case_id, trial)` group's top condition by weighted
+score, with `tie` as its own outcome, and the conditions each judge blocked. It
+also gives the agreement rates, the mean absolute difference per dimension, and
+the groups that disagree on either. Each file must pass `score`'s checks. A group
+in only one file is listed under `groups_only_in_a` or `groups_only_in_b` and left
+out of every figure; with no shared groups the figures are `null`.
+
 Record the exact CLI and model versions with published results, including measured token and cost numbers. Do not compare conditions produced with different cases, models, trial counts, or rubrics.
