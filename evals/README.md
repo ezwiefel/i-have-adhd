@@ -67,6 +67,22 @@ and unrecorded failed/retried calls are excluded. Scenario captures currently om
 token usage, and their response length includes transcript JSON and user prompts.
 The command is read-only and makes no model calls.
 
+## Format checks
+
+Report per-condition format diagnostics from the same responses file:
+
+```bash
+python3 scripts/format_checks.py evals/results/responses.jsonl
+```
+
+The JSON gives a count and rate out of rows for an opening filler sentence, a
+closing pleasantry, either of those, a numbered list, a mention of the skill or
+hidden instructions, and tool-call syntax written as text. It also gives the mean
+and maximum of each row's largest list group. Input rules match `measure`. A
+scenario row counts once and shows a trait when any assistant turn does; its
+user prompts are not checked. These are diagnostics, not a gate, and the command
+makes no model calls.
+
 ## Judge and score
 
 `scripts/judge.py` grades the responses and writes the score rows for you:
