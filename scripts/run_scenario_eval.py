@@ -86,10 +86,10 @@ def run_scenario(args: argparse.Namespace) -> int:
     first_prompt = run_evals._condition_prompt(
         case["turns"][0]["prompt"], args.condition, args.condition_skill
     )
-    if args.condition == "candidate" and not run_evals._strip_frontmatter(
+    if args.condition != "baseline" and not run_evals._strip_frontmatter(
         args.condition_skill.read_text(encoding="utf-8")
     ).strip():
-        raise ValueError("Candidate skill cannot be empty")
+        raise ValueError(f"{args.condition.capitalize()} skill cannot be empty")
 
     session_id = str(uuid.uuid4())
     spent = 0.0
@@ -106,7 +106,8 @@ def run_scenario(args: argparse.Namespace) -> int:
                 raise RuntimeError(f"Budget exhausted; reported cost: ${spent:.6f}")
             command = [
                 "claude", "--safe-mode", "--strict-mcp-config", "--print",
-                "--output-format", "json", "--model", args.model, "--tools", "",
+                "--output-format", "json", "--model", args.model,
+                *(["--effort", args.effort] if args.effort else []), "--tools", "",
                 "--resume" if index else "--session-id", session_id,
                 "--max-budget-usd", f"{remaining:.6f}",
                 first_prompt if index == 0 else turn["prompt"],
@@ -124,7 +125,8 @@ def run_scenario(args: argparse.Namespace) -> int:
             "case_id": case["id"],
             "trial": args.trial,
             "condition": args.condition,
-            "runner": f"claude:{args.model}",
+            # The effort is part of the runner so `measure` refuses to compare across efforts.
+            "runner": f"claude:{args.model}" + (f":{args.effort}" if args.effort else ""),
             "session_id": session_id,
             "response": json.dumps(transcript, ensure_ascii=False),
             "cost_usd": spent,
@@ -141,9 +143,10 @@ def main() -> int:
     validate.add_argument("scenario", type=pathlib.Path)
     run = commands.add_parser("run")
     run.add_argument("--scenario", type=pathlib.Path, required=True)
-    run.add_argument("--condition", choices=("baseline", "candidate"), required=True)
+    run.add_argument("--condition", choices=sorted(run_evals.CONDITIONS), required=True)
     run.add_argument("--condition-skill", type=pathlib.Path)
     run.add_argument("--model", required=True)
+    run.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
     run.add_argument("--trial", type=int, default=1)
     run.add_argument("--budget-usd", type=float, required=True)
     run.add_argument("--output", type=pathlib.Path, required=True)

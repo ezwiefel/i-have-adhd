@@ -29,7 +29,7 @@ class ScenarioEvaluationTest(unittest.TestCase):
         self.args = argparse.Namespace(
             scenario=SCENARIO, condition="candidate",
             condition_skill=ROOT / "skills/i-have-adhd/SKILL.md",
-            model="fixture", budget_usd=1.0, trial=1,
+            model="fixture", budget_usd=1.0, trial=1, effort=None,
             output=self.root / "response.jsonl",
         )
 
@@ -96,6 +96,67 @@ class ScenarioEvaluationTest(unittest.TestCase):
         scores = judge.parse_judge_scores(json.dumps(verdict), key, labels)
         self.assertEqual(2, len(scores))
         self.assertFalse(run_evals.summarize_scores(scores)["release_gate"]["passed"])
+
+    @mock.patch("run_scenario_eval.subprocess.run")
+    def test_comparator_injects_its_own_skill_and_pins_effort_on_every_turn(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, '{"result":"ok","total_cost_usd":0.01}', ""
+        )
+        skill = self.root / "v0.md"
+        skill.write_text("---\nname: v0\n---\nv0 fixture rules\n")
+        self.args.condition, self.args.condition_skill = "comparator", skill
+        self.args.effort = "medium"
+        row = self.run_capture()
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertIn("v0 fixture rules", commands[0][-1])
+        self.assertNotIn("name: v0", commands[0][-1])
+        for command in commands:
+            self.assertEqual("medium", command[command.index("--effort") + 1])
+        self.assertEqual("comparator", row["condition"])
+        # measure rejects mixed runners, so this keeps efforts from being compared.
+        self.assertEqual("claude:fixture:medium", row["runner"])
+
+    @mock.patch("run_scenario_eval.subprocess.run")
+    def test_effort_is_omitted_unless_requested(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, '{"result":"ok","total_cost_usd":0.01}', ""
+        )
+        row = self.run_capture()
+        self.assertNotIn("--effort", run.call_args.args[0])
+        self.assertEqual("claude:fixture", row["runner"])
+
+    @mock.patch("run_scenario_eval.subprocess.run")
+    def test_comparator_needs_a_non_empty_skill(self, run):
+        self.args.condition = "comparator"
+        empty = self.root / "empty.md"
+        empty.write_text("---\nname: v0\n---\n")
+        for skill in (None, empty):
+            with self.subTest(skill=skill):
+                self.args.condition_skill = skill
+                with self.assertRaises(ValueError):
+                    self.run_capture()
+        run.assert_not_called()
+
+    @mock.patch("run_scenario_eval.subprocess.run")
+    def test_cli_accepts_comparator_and_rejects_unknown_effort(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, '{"result":"ok","total_cost_usd":0.01}', ""
+        )
+        argv = [
+            "run_scenario_eval.py", "run", "--scenario", str(SCENARIO),
+            "--condition", "comparator",
+            "--condition-skill", str(ROOT / "skills/i-have-adhd/SKILL.md"),
+            "--model", "fixture", "--budget-usd", "1", "--output",
+        ]
+        with mock.patch.object(sys, "argv", [*argv, str(self.args.output), "--effort", "high"]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, run_scenario_eval.main())
+        self.assertIn("high", run.call_args.args[0])
+        run.reset_mock()
+        with mock.patch.object(sys, "argv", [*argv, str(self.root / "x.jsonl"), "--effort", "huge"]), \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            run_scenario_eval.main()
+        run.assert_not_called()
 
     @mock.patch("run_scenario_eval.subprocess.run")
     def test_failed_capture_cannot_be_judged_as_complete(self, run):
