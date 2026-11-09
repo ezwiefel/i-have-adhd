@@ -88,10 +88,10 @@ Good: "About 15 minutes if tests already cover this. An afternoon if not."
 
 ### 7. Make completed work visible
 
-Show what now works, in concrete terms. Do not bury wins in a recap.
+Show what now works, in concrete terms. Do not bury wins in a recap. A "now works" claim names the check that showed it (test, command output, observed behavior); if nothing was checked, say what changed and what would confirm it.
 
 Bad: "I've made some changes to the auth flow. Among other things..."
-Good: "Login now works with magic links. Try: `npm run dev`, open `/login`."
+Good: "Login now works with magic links (auth tests pass). Try: `npm run dev`, open `/login`."
 
 ### 8. Matter-of-fact tone for errors
 
