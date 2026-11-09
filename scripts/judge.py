@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import math
 import subprocess
 import sys
 import time
@@ -21,6 +22,10 @@ LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 DIMENSIONS = ("correctness", "autonomy", "actionability", "safety", "concision")
 JUDGE_BEGIN = "<!-- judge:begin -->"
 JUDGE_END = "<!-- judge:end -->"
+UNMETERED_ADVICE = (
+    "rerun with --allow-unmetered only when the provider has a separate hard "
+    "spending cap or the calls are free."
+)
 
 
 def partition_groups(
@@ -201,6 +206,45 @@ def invoke_judge(
     return text, cost
 
 
+def _reported_cost(value: Any) -> Optional[float]:
+    """Return a usable dollar figure, or None when the cost is unknown."""
+    if type(value) in (int, float) and value >= 0 and math.isfinite(value):
+        return float(value)
+    return None
+
+
+class _Budget:
+    """Reported judge spend against the cap, across resumes and failed attempts."""
+
+    def __init__(self, cap: float, allow_unmetered: bool, flag: Optional[str]) -> None:
+        self.cap = cap
+        self.allow_unmetered = allow_unmetered
+        self.flag = flag
+        self.spent = 0.0
+        self.unknown = False
+
+    def add(self, cost: Optional[float]) -> None:
+        if cost is None:
+            self.unknown = True
+        else:
+            self.spent += cost
+
+    def flags(self) -> list[str]:
+        """Return the runner arguments that pass on the remaining budget."""
+        return [self.flag, f"{self.cap - self.spent:.4f}"] if self.flag else []
+
+    def unmetered_stop(self) -> Optional[str]:
+        # Unknown spend cannot be compared with the cap, so it is not zero spend.
+        if self.unknown and not self.allow_unmetered:
+            return f"Runner did not report dollar cost; {UNMETERED_ADVICE}"
+        return None
+
+    def stop_reason(self) -> Optional[str]:
+        if self.spent >= self.cap:
+            return "Budget exhausted; stopping."
+        return self.unmetered_stop()
+
+
 def _judge_group(
     command: list[str],
     response_format: str,
@@ -208,22 +252,33 @@ def _judge_group(
     group_key: tuple,
     labels: dict[str, str],
     retries: int,
+    budget: _Budget,
 ) -> tuple[list[dict[str, Any]], Optional[float]]:
     """Invoke the judge and parse its verdict, retrying a malformed reply.
 
     A grader occasionally drops a field or emits prose around the JSON. That is
     a transient formatting failure rather than a permanent one, so it is worth
     the same retry budget as a failed process before the group is abandoned.
+    Returns the group's total reported cost, or None if any attempt's is unknown.
     """
     last_error: Optional[ValueError] = None
+    costs: list[Optional[float]] = []
     for attempt in range(retries + 1):
-        text, cost = invoke_judge(command, response_format, prompt, retries)
+        if attempt:
+            # A malformed reply can still bill, so re-check before paying again.
+            if budget.stop_reason():
+                break
+            time.sleep(min(2 ** (attempt - 1), 5))
+        text, raw_cost = invoke_judge([*command, *budget.flags()], response_format, prompt, retries)
+        cost = _reported_cost(raw_cost)
+        budget.add(cost)
+        costs.append(cost)
         try:
-            return parse_judge_scores(text, group_key, labels), cost
+            rows = parse_judge_scores(text, group_key, labels)
         except ValueError as exc:
             last_error = exc
-            if attempt < retries:
-                time.sleep(min(2**attempt, 5))
+            continue
+        return rows, None if None in costs else sum(costs)
     assert last_error is not None
     raise last_error
 
@@ -248,12 +303,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--retries", type=int, default=2)
+    parser.add_argument("--budget-usd", type=float, default=25.0)
+    parser.add_argument("--allow-unmetered", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
+    # Written this way round so that NaN is rejected too.
+    if not 0 < args.budget_usd <= 25:
+        raise ValueError("--budget-usd must be greater than 0 and no more than 25")
     rubric = grader_rubric(args.rubric.read_text(encoding="utf-8"))
     cases = {case["id"]: case for case in run_evals.load_cases(args.cases)}
     rows = run_evals.read_jsonl(args.responses)
@@ -280,17 +340,26 @@ def main(argv: Optional[list[str]] = None) -> int:
             file=sys.stderr,
         )
 
-    judged: set[tuple] = set()
-    if args.output.exists():
-        judged = {(row["case_id"], row["trial"]) for row in run_evals.read_jsonl(args.output)}
+    existing = run_evals.read_jsonl(args.output) if args.output.exists() else []
+    judged = {(row["case_id"], row["trial"]) for row in existing}
 
     config = json.loads(args.runner_config.read_text(encoding="utf-8"))
     runner = config[args.runner]
     # Runners start in an empty temp directory, so repo paths must be absolute.
     command = [part.replace("{root}", str(ROOT)) for part in runner["command"]]
     response_format = runner.get("response_format", "text")
+    if response_format != "claude-json" and not args.allow_unmetered:
+        raise RuntimeError(
+            f"The {response_format!r} response format never reports dollar cost; {UNMETERED_ADVICE}"
+        )
 
-    total_cost = 0.0
+    budget = _Budget(args.budget_usd, args.allow_unmetered, runner.get("budget_flag"))
+    # Every row of a group repeats the group's cost, so count each group once.
+    earlier = {(row["case_id"], row["trial"]): row.get("group_cost_usd") for row in existing}
+    for cost in earlier.values():
+        budget.add(_reported_cost(cost))
+
+    stop_reason: Optional[str] = None
     skipped: list[tuple] = []
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("a", encoding="utf-8") as destination:
@@ -299,13 +368,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             if key in judged:
                 print(f"skip judged {case_id}/trial {trial}")
                 continue
+            # Between groups, so everything already judged stays written.
+            stop_reason = budget.stop_reason()
+            if stop_reason:
+                break
             if case_id not in cases:
                 raise ValueError(f"{case_id}: response has no matching case in {args.cases}")
             labels = assign_labels(key, sorted(groups[key]))
             prompt = build_judge_prompt(cases[case_id], groups[key], labels, rubric)
             try:
                 scored, cost = _judge_group(
-                    command, response_format, prompt, key, labels, args.retries
+                    command, response_format, prompt, key, labels, args.retries, budget
                 )
             except (ValueError, RuntimeError) as exc:
                 # One unusable verdict must not discard the groups already
@@ -313,22 +386,28 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(f"skip {case_id}/trial {trial}: {exc}", file=sys.stderr)
                 skipped.append(key)
                 continue
-            total_cost += float(cost or 0)
             for row in scored:
-                destination.write(json.dumps(row, ensure_ascii=False) + "\n")
+                destination.write(
+                    json.dumps({**row, "group_cost_usd": cost}, ensure_ascii=False) + "\n"
+                )
             destination.flush()
             print(f"judged {case_id}/trial {trial}")
+        else:
+            # A null cost on the final group has no next group to stop it.
+            stop_reason = budget.unmetered_stop()
 
-    if total_cost:
-        print(f"Reported judge cost: ${total_cost:.4f}")
+    unreported = " (some costs were not reported)" if budget.unknown else ""
+    print(f"Reported judge cost: ${budget.spent:.4f}{unreported}")
     if skipped:
         print(
             f"{len(skipped)} group(s) went unjudged: "
             + ", ".join(f"{case_id}/trial {trial}" for case_id, trial in sorted(skipped)),
             file=sys.stderr,
         )
-        return 1
-    return 0
+    if stop_reason:
+        print(stop_reason, file=sys.stderr)
+        return 2
+    return 1 if skipped else 0
 
 
 if __name__ == "__main__":

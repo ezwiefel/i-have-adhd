@@ -86,8 +86,8 @@ built, and the label order is permuted per group, so position carries no signal.
 The permutation comes from a digest of the group key rather than a random
 source, so a resumed run reproduces the labels it used the first time.
 
-For a cross-family judge, use `--runner gemini-3-8-flash` with `GEMINI_API_KEY`
-set. The runner waits out 429 responses for about two minutes before failing.
+For a cross-family judge, use `--runner gemini-3-8-flash --allow-unmetered` with
+`GEMINI_API_KEY` set. The runner waits out 429 responses for about two minutes before failing.
 Free-tier prompts may be used to improve Google's products, so do not send
 cases you need to keep private. In a runner's `command`, `{root}` expands to the
 repository root, because runners start in an empty temporary directory. Only
@@ -103,6 +103,19 @@ Runs are resumable the same way generation is: groups already present in the
 output file are skipped. A group missing a condition cannot be scored — the
 conditions would no longer be judged on identical rows — so it is reported on
 stderr and left out rather than silently dropped.
+
+Every judge run has a spend cap. `--budget-usd` defaults to 25, which is also the
+maximum, and the remaining budget goes to any runner with a `budget_flag`. When
+reported cost reaches the cap, the judge stops between groups with exit code 2,
+and everything already judged stays in the output file. Each group's reported
+cost is stored on its score rows as `group_cost_usd`, so a resumed run counts it.
+Reported cost from a group that ends up skipped counts against that run only,
+and is not carried over when you resume.
+
+Unknown cost is not zero cost. A runner that reports no cost needs
+`--allow-unmetered`: without it the judge stops at the first null cost, keeping
+that group, and refuses to resume from rows with no recorded cost. Use the flag
+only when the provider has its own hard cap or the calls are free.
 
 Judging by hand instead is still supported: blind the `condition` field
 yourself and write one JSON object per response with these fields.

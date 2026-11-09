@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -238,7 +240,7 @@ class EndToEndTest(unittest.TestCase):
                     "--cases", str(ROOT / "evals" / "cases.jsonl"),
                     "--rubric", str(ROOT / "evals" / "rubric.md"),
                     "--runner-config", str(runner_config),
-                    "--runner", "stub",
+                    "--runner", "stub", "--allow-unmetered",
                     "--output", str(output),
                 ]
             )
@@ -293,7 +295,7 @@ class EndToEndTest(unittest.TestCase):
                         "--cases", str(ROOT / "evals" / "cases.jsonl"),
                         "--rubric", str(ROOT / "evals" / "rubric.md"),
                         "--runner-config", str(runner_config),
-                        "--runner", "stub",
+                        "--runner", "stub", "--allow-unmetered",
                         "--retries", "0",
                         "--output", str(output),
                     ]
@@ -352,7 +354,7 @@ class EndToEndTest(unittest.TestCase):
                     "--cases", str(ROOT / "evals" / "cases.jsonl"),
                     "--rubric", str(ROOT / "evals" / "rubric.md"),
                     "--runner-config", str(runner_config),
-                    "--runner", "stub",
+                    "--runner", "stub", "--allow-unmetered",
                     "--retries", "0",
                     "--output", str(output),
                 ]
@@ -397,7 +399,7 @@ class EndToEndTest(unittest.TestCase):
                     [
                         "--responses", str(responses),
                         "--runner-config", str(runner_config),
-                        "--runner", "stub",
+                        "--runner", "stub", "--allow-unmetered",
                         "--output", str(output),
                     ]
                 )
@@ -446,7 +448,7 @@ class EndToEndTest(unittest.TestCase):
                 [
                     "--responses", str(responses),
                     "--runner-config", str(runner_config),
-                    "--runner", "stub",
+                    "--runner", "stub", "--allow-unmetered",
                     "--retries", "0",
                     "--output", str(output),
                 ]
@@ -456,6 +458,227 @@ class EndToEndTest(unittest.TestCase):
             self.assertEqual({"casual-message"}, {row["case_id"] for row in rows})
             self.assertEqual(2, len(rows))
             self.assertNotEqual(0, exit_code, "skipped groups must not report success")
+
+
+class BudgetTest(unittest.TestCase):
+    VERDICT = {
+        "correctness": 4,
+        "autonomy": 4,
+        "actionability": 4,
+        "safety": 5,
+        "concision": 3,
+        "blocker": False,
+        "notes": "fixture",
+    }
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        patcher = mock.patch.object(judge.time, "sleep")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.calls = self.tmp / "calls.txt"
+        self.output = self.tmp / "scores.jsonl"
+        self.write_inputs(("one", "two", "three"))
+
+    def write_inputs(self, case_ids):
+        self.cases = self.tmp / "cases.jsonl"
+        self.cases.write_text(
+            "".join(
+                json.dumps(
+                    {"id": case_id, "category": "x", "prompt": "p", "risk": "low", "criteria": ["c"]}
+                )
+                + "\n"
+                for case_id in case_ids
+            )
+        )
+        self.responses = self.tmp / "responses.jsonl"
+        self.responses.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "case_id": case_id,
+                        "trial": 1,
+                        "condition": condition,
+                        "runner": "stub",
+                        "response": "text",
+                    }
+                )
+                + "\n"
+                for case_id in case_ids
+                for condition in ("baseline", "candidate")
+            )
+        )
+
+    def write_runner(self, cost, *, result=None, response_format="claude-json", budget_flag=None):
+        if result is None:
+            result = json.dumps({"A": self.VERDICT, "B": self.VERDICT})
+        reply = self.tmp / "reply.json"
+        reply.write_text(json.dumps({"result": result, "usage": {}, "total_cost_usd": cost}))
+        runner = {
+            # Flags the judge appends arrive as $@ and are logged, one line per call.
+            "command": ["sh", "-c", f'cat > /dev/null; echo "$*" >> "{self.calls}"; cat "{reply}"', "sh"],
+            "response_format": response_format,
+        }
+        if budget_flag:
+            runner["budget_flag"] = budget_flag
+        self.runner_config = self.tmp / "runners.json"
+        self.runner_config.write_text(json.dumps({"stub": runner}))
+
+    def judge(self, *extra):
+        return judge.main(
+            [
+                "--responses", str(self.responses),
+                "--cases", str(self.cases),
+                "--rubric", str(ROOT / "evals" / "rubric.md"),
+                "--runner-config", str(self.runner_config),
+                "--runner", "stub",
+                "--output", str(self.output),
+                *extra,
+            ]
+        )
+
+    def judge_quietly(self, *extra):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = self.judge(*extra)
+        return code, stderr.getvalue()
+
+    def call_log(self):
+        return self.calls.read_text().splitlines() if self.calls.exists() else []
+
+    def judged_cases(self):
+        return sorted({row["case_id"] for row in run_evals.read_jsonl(self.output)})
+
+    def test_budget_stop_halts_at_the_cap_and_keeps_completed_groups(self):
+        self.write_runner(0.6)
+
+        code, stderr = self.judge_quietly("--budget-usd", "1")
+
+        self.assertEqual(2, code)
+        self.assertIn("Budget exhausted", stderr)
+        self.assertEqual(2, len(self.call_log()))
+        self.assertEqual(["one", "three"], self.judged_cases())
+        self.assertEqual(4, len(run_evals.read_jsonl(self.output)))
+
+    def test_remaining_budget_is_passed_through_budget_flag(self):
+        self.write_runner(0.6, budget_flag="--max-budget-usd")
+
+        self.judge_quietly("--budget-usd", "1")
+
+        self.assertEqual(
+            ["--max-budget-usd 1.0000", "--max-budget-usd 0.4000"], self.call_log()
+        )
+
+    def test_finishing_exactly_at_the_cap_is_a_clean_exit(self):
+        self.write_inputs(("one",))
+        self.write_runner(1.0)
+
+        code, _ = self.judge_quietly("--budget-usd", "1")
+
+        self.assertEqual(0, code)
+
+    def test_resume_counts_earlier_spend_once_per_group(self):
+        self.write_runner(0.6, budget_flag="--max-budget-usd")
+
+        first, _ = self.judge_quietly("--budget-usd", "0.5")
+        self.assertEqual(2, first)
+        self.assertEqual(1, len(self.call_log()))
+        self.assertEqual(
+            [0.6, 0.6], [row["group_cost_usd"] for row in run_evals.read_jsonl(self.output)]
+        )
+
+        # Earlier spend alone exhausts the same cap, so nothing new runs.
+        second, _ = self.judge_quietly("--budget-usd", "0.5")
+        self.assertEqual(2, second)
+        self.assertEqual(1, len(self.call_log()))
+
+        # 2.0 - 0.6, not 2.0 - 1.2: both of the group's rows carry its one cost.
+        third, _ = self.judge_quietly("--budget-usd", "2")
+        self.assertEqual(0, third)
+        self.assertEqual("--max-budget-usd 1.4000", self.call_log()[1])
+        self.assertEqual(["one", "three", "two"], self.judged_cases())
+
+    def test_null_cost_stops_without_allow_unmetered_and_keeps_the_group(self):
+        self.write_runner(None)
+
+        code, stderr = self.judge_quietly()
+
+        self.assertEqual(2, code)
+        self.assertIn("--allow-unmetered", stderr)
+        self.assertEqual(1, len(self.call_log()))
+        self.assertEqual(["one"], self.judged_cases())
+
+    def test_null_cost_on_the_only_group_still_requires_allow_unmetered(self):
+        self.write_inputs(("one",))
+        self.write_runner(None)
+
+        code, stderr = self.judge_quietly()
+
+        self.assertEqual(2, code)
+        self.assertIn("--allow-unmetered", stderr)
+        self.assertEqual(["one"], self.judged_cases())
+
+    def test_allow_unmetered_judges_everything_and_records_null(self):
+        self.write_runner(None)
+
+        code, _ = self.judge_quietly("--allow-unmetered")
+
+        self.assertEqual(0, code)
+        self.assertEqual(3, len(self.call_log()))
+        self.assertEqual(
+            {None}, {row["group_cost_usd"] for row in run_evals.read_jsonl(self.output)}
+        )
+
+    def test_earlier_unreported_spend_blocks_a_resume_without_the_flag(self):
+        self.write_runner(None)
+        self.judge_quietly()
+        self.write_runner(0.1)
+        calls_before = len(self.call_log())
+
+        blocked, stderr = self.judge_quietly()
+        self.assertEqual(2, blocked)
+        self.assertIn("--allow-unmetered", stderr)
+        self.assertEqual(calls_before, len(self.call_log()))
+
+        allowed, _ = self.judge_quietly("--allow-unmetered")
+        self.assertEqual(0, allowed)
+        self.assertEqual(calls_before + 2, len(self.call_log()))
+
+    def test_format_that_cannot_report_cost_is_rejected_before_any_call(self):
+        self.write_runner(None, response_format="text")
+
+        with self.assertRaisesRegex(RuntimeError, "--allow-unmetered"):
+            self.judge()
+
+        self.assertEqual([], self.call_log())
+        self.assertFalse(self.output.exists())
+
+    def test_billed_malformed_attempts_count_and_stop_further_retries(self):
+        self.write_runner(0.6, result="not json")
+
+        code, _ = self.judge_quietly("--budget-usd", "1", "--retries", "5")
+
+        self.assertEqual(2, code)
+        self.assertEqual(2, len(self.call_log()))
+        self.assertFalse(run_evals.read_jsonl(self.output))
+
+    def test_budget_outside_the_allowed_range_is_rejected(self):
+        self.write_runner(0.1)
+        for value in ("0", "-1", "26", "nan"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "--budget-usd"):
+                    self.judge(f"--budget-usd={value}")
+        self.assertEqual([], self.call_log())
+
+    def test_only_a_finite_non_negative_number_counts_as_reported_cost(self):
+        self.assertEqual(0.5, judge._reported_cost(0.5))
+        self.assertEqual(1.0, judge._reported_cost(1))
+        self.assertEqual(0.0, judge._reported_cost(0))
+        for value in (None, True, "0.5", -1, float("nan"), float("inf")):
+            with self.subTest(value=value):
+                self.assertIsNone(judge._reported_cost(value))
 
 
 if __name__ == "__main__":
