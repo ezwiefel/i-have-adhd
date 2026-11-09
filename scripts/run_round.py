@@ -203,7 +203,9 @@ def _limits(runner: dict[str, Any]) -> dict[str, Any]:
         # Same test as _scrub: meta.json is committed, so no secret may sit in a runner's env.
         if len(value) >= 8 and SECRET_NAME.search(name):
             raise RoundError(f"runner env {name} looks like a secret; keep it out of the config")
-    return {key: runner[key] for key in ("env", "max_call_usd") if key in runner}
+    limits = {key: runner[key] for key in ("env", "max_call_usd") if key in runner}
+    note = _flag(runner["command"], "--append-system-prompt")
+    return {**limits, "system_note": note} if note else limits
 
 
 def _step(

@@ -48,8 +48,11 @@ class EvaluationHarnessTest(unittest.TestCase):
         self.assertEqual(claude, runners["claude"])
         model_at = claude["command"].index("--model") + 1
         limits = {"env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8000"}, "max_call_usd": 0.25}
-        for model, extra in (
-            ("claude-opus-5-5", limits), ("claude-sonnet-5-5", limits), ("claude-fable-5-1", {}),
+        note = "You have no tools, files, or working directory in this conversation. You cannot run commands or read anything beyond this message. Reply in text only, using what the message gives you."
+        for model, extra, note_flags in (
+            ("claude-opus-5-5", limits, ["--append-system-prompt", note]),
+            ("claude-sonnet-5-5", limits, ["--append-system-prompt", note]),
+            ("claude-fable-5-1", {}, []),
         ):
             with self.subTest(model=model):
                 command = [
@@ -57,6 +60,7 @@ class EvaluationHarnessTest(unittest.TestCase):
                     model,
                     "--effort",
                     "medium",
+                    *note_flags,
                     *claude["command"][model_at + 1:],
                 ]
                 self.assertEqual({**claude, "command": command, **extra}, runners[model])

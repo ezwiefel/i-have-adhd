@@ -363,6 +363,19 @@ class SetupRecordTest(RoundTestCase):
         self.assertEqual(expected, self.meta()["limits"])
         self.assertEqual(expected, self.meta("shared")["sets"][str(TRIALS)]["limits"])
 
+    def test_system_note_is_recorded_and_a_change_is_refused_on_resume(self):
+        config = json.loads((self.ws / "runners.stub.json").read_text("utf-8"))
+        command = config["stub"]["command"]
+        self.set_runner_limits("stub", command=[*command, "--append-system-prompt", "No tools."])
+        self.assertEqual(0, self.run_cli()[0])
+        self.assertEqual("No tools.", self.meta()["limits"]["system_note"])
+        self.set_runner_limits("stub", command=[*command, "--append-system-prompt", "Changed."])
+
+        code, _, err = self.run_cli()
+
+        self.assertEqual(1, code)
+        self.assertIn("limits", err)
+
     def test_generator_limit_change_is_refused_on_resume(self):
         self.set_runner_limits("stub", max_call_usd=0.25)
         self.assertEqual(0, self.run_cli()[0])
