@@ -83,7 +83,8 @@ Its criteria require *"Acts on the repository instead of delegating the edit
 back to the user"*, but every runner passes `--tools ""`, so no response can act
 on anything. Both conditions draw blockers on it in most trials, and the
 baseline degenerates into narrating tool calls it cannot make. The case needs
-real tools and a fixture workspace, or rewriting to grade stated intent.
+real tools and a fixture workspace, or rewriting to grade stated intent. It has
+since been rewritten to grade stated intent; the scores here are for the original.
 
 ### `partial-success` is the one candidate regression worth investigating
 

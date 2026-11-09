@@ -618,6 +618,21 @@ class EvaluationHarnessTest(unittest.TestCase):
         errors = run_evals.validate_cases([case, dict(case)])
         self.assertTrue(any("Duplicate" in error for error in errors))
 
+    def test_targets_must_be_a_list_of_strings_when_present(self):
+        case = {
+            "id": "targeted",
+            "category": "direct-answer",
+            "prompt": "What is 2 + 2?",
+            "risk": "low",
+            "criteria": ["Answers 4."],
+        }
+        self.assertEqual([], run_evals.validate_cases([case]))
+        self.assertEqual([], run_evals.validate_cases([dict(case, targets=["C1", "C4"])]))
+        for targets in ("C4", None, ["C4", 1], {"C4": True}):
+            with self.subTest(targets=targets):
+                errors = run_evals.validate_cases([dict(case, targets=targets)])
+                self.assertEqual(["Case targeted: targets must be a list of strings"], errors)
+
     def test_jsonl_loader_reports_invalid_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bad.jsonl"

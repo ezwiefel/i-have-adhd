@@ -95,6 +95,11 @@ def validate_cases(cases: list[dict[str, Any]]) -> list[str]:
             errors.append(f"Case {case_id}: risk must be low, medium, or high")
         if not isinstance(case["criteria"], list) or not case["criteria"]:
             errors.append(f"Case {case_id}: criteria must be a non-empty list")
+        if "targets" in case and not (
+            isinstance(case["targets"], list)
+            and all(isinstance(target, str) for target in case["targets"])
+        ):
+            errors.append(f"Case {case_id}: targets must be a list of strings")
     return errors
 
 
