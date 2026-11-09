@@ -268,6 +268,82 @@ class SharedRowsTest(RoundTestCase):
         self.assertIn("skills", err)
 
 
+class SetupRecordTest(RoundTestCase):
+    def test_comparator_change_is_refused_whatever_the_trial_count(self):
+        (self.ws / "alt.md").write_text("Another comparator.\n", encoding="utf-8")
+        self.assertEqual(0, self.run_cli("--trials=1", f"--scenarios={SCENARIO}")[0])
+        capture = self.results / "r1" / "shared" / "scenarios" / SCENARIO / "comparator-1.jsonl"
+        before = capture.read_bytes()
+        self.calls_log.unlink()
+
+        code, _, err = self.run_cli(
+            "--trials=2", "--comparator-ref=alt.md", f"--scenarios={SCENARIO}", variant="c2=skill.md"
+        )
+
+        self.assertEqual(1, code, err)
+        self.assertIn("comparator", err)
+        self.assertEqual(before, capture.read_bytes())
+        self.assertEqual(collections.Counter(), self.calls())
+
+    def test_cli_version_change_is_refused_on_resume(self):
+        self.assertEqual(0, self.run_cli()[0])
+        self.assertEqual("0.0.0 (stub)", self.meta("shared")["sets"][str(TRIALS)]["cli_version"])
+        with mock.patch("run_round._cli_version", return_value="9.9.9"):
+            code, _, err = self.run_cli()
+            self.assertEqual(1, code)
+            self.assertIn("cli_version", err)
+            # A new variant must not attach its version to rows the old CLI made.
+            code, _, err = self.run_cli(variant="c2=skill.md")
+        self.assertEqual(1, code)
+        self.assertIn("cli_version", err)
+        self.assertEqual("0.0.0 (stub)", self.meta("shared")["sets"][str(TRIALS)]["cli_version"])
+
+    def test_judge_model_prefers_flag_then_key_then_name(self):
+        for runner, expected in (
+            ({"command": ["x", "--model", "flagged"], "model": "keyed"}, "flagged"),
+            ({"command": ["x"], "model": "keyed"}, "keyed"),
+            ({"command": ["x"]}, "name"),
+        ):
+            with self.subTest(runner=runner):
+                self.assertEqual(expected, run_round._judge_model({"name": runner}, "name"))
+
+    def test_example_gemini_judge_records_its_pinned_model(self):
+        config = json.loads((ROOT / "evals/runners.example.json").read_text("utf-8"))
+        self.assertEqual("gemini-3.8-flash", run_round._judge_model(config, "gemini-3-8-flash"))
+
+    def test_generator_with_no_determinable_model_is_refused(self):
+        config = json.loads((self.ws / "runners.stub.json").read_text("utf-8"))
+        config["bare"] = {"command": ["claude"], "response_format": "claude-json"}
+        (self.ws / "runners.stub.json").write_text(json.dumps(config), encoding="utf-8")
+        code, _, err = self.run_cli("--generator-runner=bare")
+        self.assertEqual(1, code)
+        self.assertIn("model", err)
+        self.assertEqual(collections.Counter(), self.calls())
+
+    def test_generator_model_key_is_recorded(self):
+        config = json.loads((self.ws / "runners.stub.json").read_text("utf-8"))
+        config["keyed"] = {**config["stub"], "command": ["claude"], "model": "keyed-model"}
+        (self.ws / "runners.stub.json").write_text(json.dumps(config), encoding="utf-8")
+        code, _, err = self.run_cli("--generator-runner=keyed")
+        self.assertEqual(0, code, err)
+        self.assertEqual("keyed-model", self.meta()["model"])
+
+    def test_judge_model_change_is_refused_on_resume(self):
+        self.assertEqual(0, self.run_cli()[0])
+        config = json.loads((self.ws / "runners.stub.json").read_text("utf-8"))
+        config["stub-judge-a"]["command"][-1] = "another-judge-model"
+        (self.ws / "runners.stub.json").write_text(json.dumps(config), encoding="utf-8")
+        code, _, err = self.run_cli()
+        self.assertEqual(1, code)
+        self.assertIn("judges", err)
+
+    def test_workspace_is_required(self):
+        argv = ["--round", "r1", "--generator-runner", "stub", "--judges", "x", "--budget-usd", "1"]
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            run_round.main(argv)
+        self.assertIn("--workspace", err.getvalue())
+
+
 class EndToEndTest(RoundTestCase):
     def test_stub_round_writes_a_complete_results_folder(self):
         code, out, err = self.run_cli(

@@ -39,8 +39,11 @@ COMPARE_PAIRS = (
     ("comparator", "candidate"),
 )
 ROUND_ZERO_FOLDER = "v0"
-SHARED_SETUP = ("runner", "model", "effort", "comparator", "case_set")
-VARIANT_SETUP = ("skills", "runner", "model", "effort", "trials", "case_set", "rubric_sha256")
+SHARED_SETUP = ("runner", "model", "cli_version", "effort", "comparator", "case_set")
+VARIANT_SETUP = (
+    "skills", "runner", "model", "cli_version", "effort", "trials", "case_set", "rubric_sha256",
+    "judges",
+)
 SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.IGNORECASE)
 
 
@@ -106,6 +109,10 @@ def _comma_list(value: str, what: str) -> list[str]:
 
 def _flag(command: list[str], name: str) -> Optional[str]:
     return command[command.index(name) + 1] if name in command[:-1] else None
+
+
+def _judge_model(config: dict[str, Any], name: str) -> str:
+    return _flag(config[name]["command"], "--model") or config[name].get("model") or name
 
 
 # ---- git and files --------------------------------------------------------------------
@@ -231,8 +238,8 @@ def _cli_version(runner: dict[str, Any]) -> str:
 # ---- spend ----------------------------------------------------------------------------
 
 
-def _usd(rows: list[dict[str, Any]], field: str = "cost_usd") -> float:
-    return round(sum(judge._reported_cost(row.get(field)) or 0.0 for row in rows), 6)
+def _usd(rows: list[dict[str, Any]]) -> float:
+    return round(sum(judge._reported_cost(row.get("cost_usd")) or 0.0 for row in rows), 6)
 
 
 def _failed_usd(directory: Path, pattern: str, condition: Optional[str] = None) -> float:
@@ -403,11 +410,13 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
         raise RoundError(f"not in the runner config: {', '.join(unknown)}")
 
     command = config[generator]["command"]
-    model = _flag(command, "--model")
+    model = _flag(command, "--model") or config[generator].get("model")
+    if not model:
+        raise RoundError(f"cannot determine the model of generator runner {generator}")
     scenarios = _comma_list(args.scenarios, "scenario")
     # run_scenario_eval always drives `claude --model <model>` itself.
-    if scenarios and (command[0] != "claude" or not model):
-        raise RoundError("scenarios need a claude generator runner with a pinned --model")
+    if scenarios and command[0] != "claude":
+        raise RoundError("scenarios need a claude generator runner")
     for scenario in scenarios:
         run_scenario_eval.load_scenario(ROOT / "evals" / "scenarios" / scenario)
 
@@ -471,19 +480,20 @@ def _load_meta(path: Path) -> dict[str, Any]:
 
 def _shared_record(plan: SimpleNamespace) -> dict[str, Any]:
     return {
-        "runner": plan.generator, "model": plan.model, "effort": plan.effort,
-        "comparator": plan.skills["comparator"], "case_set": plan.case_set,
+        "runner": plan.generator, "model": plan.model, "cli_version": plan.cli_version,
+        "effort": plan.effort, "comparator": plan.skills["comparator"], "case_set": plan.case_set,
     }
 
 
 def _check_resume(plan: SimpleNamespace, meta: dict[str, Any]) -> None:
-    earlier = _load_meta(plan.shared_dir / "meta.json").get("sets", {}).get(str(plan.trials), {})
-    _refuse_changed_setup(earlier, _shared_record(plan), SHARED_SETUP, str(plan.shared_responses))
+    # Scenario captures are shared across trial counts, so every set must match.
+    for earlier in _load_meta(plan.shared_dir / "meta.json").get("sets", {}).values():
+        _refuse_changed_setup(earlier, _shared_record(plan), SHARED_SETUP, str(plan.shared_dir))
     old = _load_meta(plan.variant_dir / "meta.json")
     _refuse_changed_setup(old, meta, VARIANT_SETUP, str(plan.variant_dir))
 
 
-def _base_meta(plan: SimpleNamespace, public_sha: str, cli_version: str) -> dict[str, Any]:
+def _base_meta(plan: SimpleNamespace, public_sha: str) -> dict[str, Any]:
     return {
         "round": plan.round,
         "variant": plan.variant,
@@ -492,15 +502,14 @@ def _base_meta(plan: SimpleNamespace, public_sha: str, cli_version: str) -> dict
         "skills": plan.skills,
         "runner": plan.generator,
         "model": plan.model,
-        "cli_version": cli_version,
+        "cli_version": plan.cli_version,
         "effort": plan.effort,
         "trials": plan.trials,
         "case_set": plan.case_set,
         "rubric_sha256": plan.rubric_sha256,
         "scenarios": plan.scenarios,
         "judges": [
-            # The Gemini runner pins its model in code, so its name is the pin.
-            {"runner": name, "model": _flag(plan.config[name]["command"], "--model") or name}
+            {"runner": name, "model": _judge_model(plan.config, name)}
             for name in plan.judges
         ],
         "budget_usd": plan.budget,
@@ -680,7 +689,8 @@ def run_round(args: argparse.Namespace) -> int:
             f"the ${SPEND_LIMIT_USD:.0f} limit; refusing to start"
         )
     public_sha = _commit_for("HEAD")
-    plan.meta = _base_meta(plan, public_sha, _cli_version(plan.runner))
+    plan.cli_version = _cli_version(plan.runner)
+    plan.meta = _base_meta(plan, public_sha)
     _check_resume(plan, plan.meta)
 
     status = plan.shared_status = "failed"
@@ -698,7 +708,7 @@ def run_round(args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     add = parser.add_argument
-    add("--workspace", type=Path, default=Path.cwd(), help="Results go under <workspace>/results")
+    add("--workspace", type=Path, required=True, help="Results go under <workspace>/results")
     add("--round", required=True, help="Round label, such as r0-baseline")
     add("--variant", default="", help="name=skill_ref; blank for Round 0 (no candidate)")
     add("--comparator-ref", default="main", help="Public-repo git ref for the v0 skill")

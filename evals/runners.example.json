@@ -62,7 +62,8 @@
       "python3",
       "{root}/scripts/runners/gemini_judge.py"
     ],
-    "response_format": "claude-json"
+    "response_format": "claude-json",
+    "model": "gemini-3.8-flash"
   },
   "codex": {
     "command": [

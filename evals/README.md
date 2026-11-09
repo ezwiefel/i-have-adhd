@@ -191,7 +191,7 @@ judge, and every report. Repeat it per variant, naming the same round.
 
 ```bash
 python3 scripts/run_round.py \
-  --workspace . \
+  --workspace /path/to/eval-workspace \
   --round r1-c3 \
   --variant c3=skill-v1 \
   --comparator-ref main \
@@ -202,7 +202,8 @@ python3 scripts/run_round.py \
   --trials 3
 ```
 
-`--variant` is `name=skill_ref`, where `skill_ref` is a file in the workspace or a git
+`--workspace` is required and has no default, so results are only written to a folder you
+name. `--variant` is `name=skill_ref`, where `skill_ref` is a file in the workspace or a git
 ref of this repository. Leave it out for a round with no candidate; results then go to a
 folder named `v0`. Names, refs and paths are validated, and `--cases`, `--rubric` and
 `--runner-config` must resolve inside `--workspace`.
@@ -211,7 +212,13 @@ Results go to `<workspace>/results/<round>/<variant>/`, including `meta.json` an
 `reports/`. Baseline and comparator rows are generated once per round and trial count in
 `results/<round>/shared/` and copied to each variant, so a later variant reuses them
 unchanged. Rerunning the same command resumes from the rows on disk. A rerun that changes
-the skill, runner, cases, trials or rubric is refused; use a new round name.
+the skill, runner, model, CLI version, cases, trials, rubric or judge models is refused,
+and so is a change to the comparator or shared setup at any trial count, because scenario
+captures are shared across trial counts; use a new round name.
+
+A generator runner must have a determinable model (a `--model` flag or a `"model"` key in
+the runner config). A judge's recorded model is that flag, then that key, then the runner
+name.
 
 Before any work it adds reported spend from every `results/*/*/meta.json` to the caps of
 the work left to do, and refuses to reach $120. A results folder with a missing or
