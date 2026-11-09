@@ -1,0 +1,25 @@
+{
+  "stub": {
+    "command": ["claude", "--model", "stub-model", "--effort", "medium"],
+    "response_format": "claude-json",
+    "budget_flag": "--max-budget-usd",
+    "path_prepend": "{root}/evals/stub-bin"
+  },
+  "stub-judge-a": {
+    "command": ["claude", "--stub-judge", "--model", "stub-judge-a"],
+    "response_format": "claude-json",
+    "budget_flag": "--max-budget-usd",
+    "path_prepend": "{root}/evals/stub-bin"
+  },
+  "stub-judge-b": {
+    "command": ["claude", "--stub-judge", "--model", "stub-judge-b"],
+    "response_format": "claude-json",
+    "budget_flag": "--max-budget-usd",
+    "path_prepend": "{root}/evals/stub-bin"
+  },
+  "stub-judge-unmetered": {
+    "command": ["claude", "--stub-judge", "--stub-unmetered"],
+    "response_format": "claude-json",
+    "path_prepend": "{root}/evals/stub-bin"
+  }
+}

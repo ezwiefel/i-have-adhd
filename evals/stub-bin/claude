@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Stand-in for the `claude` CLI: canned JSON, no model, no network, $0.
+
+Reached only through `path_prepend` in evals/runners.stub.json. The STUB_* variables
+let tests set a reported cost, force a failure, and count calls.
+"""
+
+import json
+import os
+import sys
+import uuid
+
+JUDGE_FLAG = "--stub-judge"
+
+
+def main() -> int:
+    if "--version" in sys.argv:
+        print("0.0.0 (stub)")
+        return 0
+    judging = JUDGE_FLAG in sys.argv
+    if os.environ.get("STUB_CALL_LOG"):
+        with open(os.environ["STUB_CALL_LOG"], "a", encoding="utf-8") as log:
+            log.write("judge\n" if judging else "generate\n")
+    fail_on = os.environ.get("STUB_FAIL_MATCH")
+    if fail_on and fail_on in " ".join(sys.argv[1:]) + sys.stdin.read():
+        print(os.environ.get("STUB_FAIL_MESSAGE", "stub failure"), file=sys.stderr)
+        return 1
+    verdict = {
+        "correctness": 4, "autonomy": 4, "actionability": 4, "safety": 5, "concision": 4,
+        "blocker": False, "notes": "Stub verdict.",
+    }
+    # The nonce makes any regenerated row visible as a changed row.
+    result = json.dumps({label: verdict for label in "ABC"}) if judging else (
+        f"Stub response {uuid.uuid4()}."
+    )
+    cost = None if "--stub-unmetered" in sys.argv else float(os.environ.get("STUB_COST_USD", "0"))
+    print(json.dumps({
+        "result": result,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "total_cost_usd": cost,
+    }))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

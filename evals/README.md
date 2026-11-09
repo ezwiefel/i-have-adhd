@@ -182,4 +182,46 @@ rows, `status` is `ceiling_unknown` and the mean is `null`. `status` also report
 `no_targeted_cases`, `no_scored_targeted_cases` and `all_targeted_cases_at_ceiling`,
 each with a `null` mean. The command makes no model calls.
 
+## Run a whole round
+
+`scripts/run_round.py` runs one variant through a round: generation, scenarios, every
+judge, and every report. Repeat it per variant, naming the same round.
+
+```bash
+python3 scripts/run_round.py \
+  --workspace . \
+  --round r1-c3 \
+  --variant c3=skill-v1 \
+  --comparator-ref main \
+  --generator-runner claude-opus-5-5 \
+  --judges claude-opus-5-5,gemini-3-8-flash \
+  --unmetered-judges gemini-3-8-flash \
+  --budget-usd 15 \
+  --trials 3
+```
+
+`--variant` is `name=skill_ref`, where `skill_ref` is a file in the workspace or a git
+ref of this repository. Leave it out for a round with no candidate; results then go to a
+folder named `v0`. Names, refs and paths are validated, and `--cases`, `--rubric` and
+`--runner-config` must resolve inside `--workspace`.
+
+Results go to `<workspace>/results/<round>/<variant>/`, including `meta.json` and
+`reports/`. Baseline and comparator rows are generated once per round and trial count in
+`results/<round>/shared/` and copied to each variant, so a later variant reuses them
+unchanged. Rerunning the same command resumes from the rows on disk. A rerun that changes
+the skill, runner, cases, trials or rubric is refused; use a new round name.
+
+Before any work it adds reported spend from every `results/*/*/meta.json` to the caps of
+the work left to do, and refuses to reach $120. A results folder with a missing or
+malformed `meta.json` has unknown spend, so it also refuses until that folder is repaired
+or removed. `reported_costs.total_usd` covers the folder's own spend; `shared/meta.json`
+holds the shared rows, so each dollar is counted once. Costs are read back from the rows,
+so a resume includes earlier spend. A failed attempt that left no row is not counted,
+as elsewhere in the harness. A judge named in `--unmetered-judges` records `null` costs
+and adds no cap.
+
+`evals/runners.stub.json` runs the same pipeline against canned JSON at $0. Copy it into
+the workspace and pass `--runner-config`, `--generator-runner stub` and
+`--judges stub-judge-a,stub-judge-b`.
+
 Record the exact CLI and model versions with published results, including measured token and cost numbers. Do not compare conditions produced with different cases, models, trial counts, or rubrics.
