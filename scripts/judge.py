@@ -6,8 +6,10 @@ import hashlib
 import json
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
 
@@ -225,8 +227,15 @@ class _Budget:
     """Reported judge spend against the cap, across resumes and failed attempts."""
 
     def __init__(
-        self, cap: float, allow_unmetered: bool, flag: Optional[str], output: Path
+        self,
+        cap: float,
+        allow_unmetered: bool,
+        flag: Optional[str],
+        output: Path,
+        call_cap: Optional[float] = None,
     ) -> None:
+        self.lock = threading.RLock()
+        self.call_cap = call_cap
         self.cap = cap
         self.allow_unmetered = allow_unmetered
         self.flag = flag
@@ -239,23 +248,28 @@ class _Budget:
             self.failed[(entry["case_id"], entry["trial"])] += entry["cost_usd"]
 
     def add(self, cost: Optional[float]) -> None:
-        if cost is None:
-            self.unknown = True
-        else:
-            self.spent += cost
+        with self.lock:
+            if cost is None:
+                self.unknown = True
+            else:
+                self.spent += cost
 
     def failed_attempt(self, group_key: tuple, cost: Optional[float]) -> None:
         """Count an attempt that leaves no score row, and persist it for a resume."""
-        self.add(cost)
-        if cost is not None:
-            self.failed[group_key] += cost
-            run_evals.record_failed_spend(
-                self.output, {"case_id": group_key[0], "trial": group_key[1]}, cost
-            )
+        with self.lock:
+            self.add(cost)
+            if cost is not None:
+                self.failed[group_key] += cost
+                run_evals.record_failed_spend(
+                    self.output, {"case_id": group_key[0], "trial": group_key[1]}, cost
+                )
 
     def flags(self) -> list[str]:
         """Return the runner arguments that pass on the remaining budget."""
-        return [self.flag, f"{self.cap - self.spent:.4f}"] if self.flag else []
+        if not self.flag:
+            return []
+        with self.lock:
+            return [self.flag, f"{run_evals.call_budget(self.cap - self.spent, self.call_cap):.4f}"]
 
     def unmetered_stop(self) -> Optional[str]:
         # Unknown spend cannot be compared with the cap, so it is not zero spend.
@@ -328,6 +342,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--retries", type=int, default=2)
+    parser.add_argument(
+        "--parallel", type=run_evals.positive_int, default=1, help="Groups at once (1-16)"
+    )
     parser.add_argument("--budget-usd", type=float, default=25.0)
     parser.add_argument("--allow-unmetered", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
@@ -378,7 +395,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"The {response_format!r} response format never reports dollar cost; {UNMETERED_ADVICE}"
         )
 
-    budget = _Budget(args.budget_usd, args.allow_unmetered, runner.get("budget_flag"), args.output)
+    budget = _Budget(
+        args.budget_usd,
+        args.allow_unmetered,
+        runner.get("budget_flag"),
+        args.output,
+        runner.get("max_call_usd"),
+    )
     # Every row of a group repeats the group's cost, so count each group once.
     earlier = {(row["case_id"], row["trial"]): row.get("group_cost_usd") for row in existing}
     for cost in earlier.values():
@@ -386,17 +409,23 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     stop_reason: Optional[str] = None
     skipped: list[tuple] = []
+    lock = threading.Lock()
+    halt = threading.Event()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("a", encoding="utf-8") as destination:
-        for key in sorted(complete):
+        def judge_one(key: tuple) -> None:
+            nonlocal stop_reason
             case_id, trial = key
             if key in judged:
                 print(f"skip judged {case_id}/trial {trial}")
-                continue
+                return
             # Between groups, so everything already judged stays written.
-            stop_reason = budget.stop_reason()
-            if stop_reason:
-                break
+            reason = budget.stop_reason()
+            if reason:
+                with lock:
+                    stop_reason = stop_reason or reason
+                halt.set()
+                return
             if case_id not in cases:
                 raise ValueError(f"{case_id}: response has no matching case in {args.cases}")
             labels = assign_labels(key, sorted(groups[key]))
@@ -409,17 +438,33 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # One unusable verdict must not discard the groups already
                 # written or the ones still queued behind it.
                 print(f"skip {case_id}/trial {trial}: {exc}", file=sys.stderr)
-                skipped.append(key)
-                continue
-            for row in scored:
-                destination.write(
-                    json.dumps({**row, "group_cost_usd": cost}, ensure_ascii=False) + "\n"
-                )
-            destination.flush()
+                with lock:
+                    skipped.append(key)
+                return
+            with lock:
+                for row in scored:
+                    destination.write(
+                        json.dumps({**row, "group_cost_usd": cost}, ensure_ascii=False) + "\n"
+                    )
+                destination.flush()
             print(f"judged {case_id}/trial {trial}")
-        else:
-            # A null cost on the final group has no next group to stop it.
-            stop_reason = budget.unmetered_stop()
+
+        def judge_unless_halted(key: tuple) -> None:
+            if halt.is_set():
+                return
+            try:
+                judge_one(key)
+            except Exception:
+                halt.set()
+                raise
+
+        # Leaving the pool waits for groups in flight, so their rows are written before any raise.
+        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+            futures = [pool.submit(judge_unless_halted, key) for key in sorted(complete)]
+        for future in futures:
+            future.result()
+        # A null cost on the final group has no next group to stop it.
+        stop_reason = stop_reason or budget.unmetered_stop()
 
     unreported = " (some costs were not reported)" if budget.unknown else ""
     print(f"Reported judge cost: ${budget.spent:.4f}{unreported}")

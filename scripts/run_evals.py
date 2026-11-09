@@ -9,9 +9,11 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter, defaultdict
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
 
@@ -69,6 +71,18 @@ def _reported_cost(value: Any) -> Optional[float]:
     if type(value) in (int, float) and value >= 0 and math.isfinite(value):
         return float(value)
     return None
+
+
+def call_budget(remaining: float, call_cap: Optional[float]) -> float:
+    """The dollars one call may spend: what is left, held to the runner's `max_call_usd`."""
+    return min(remaining, call_cap) if call_cap else remaining
+
+
+def positive_int(value: str) -> int:
+    number = int(value)
+    if not 1 <= number <= 16:
+        raise argparse.ArgumentTypeError("must be from 1 to 16")
+    return number
 
 
 def failed_spend_path(output: Path) -> Path:
@@ -406,6 +420,9 @@ def failed_generation(payload: dict[str, Any]) -> bool:
         or str(payload.get("subtype", "")).startswith("error")
         or not isinstance(response, str)
         or not response.strip()
+        # Runners have no tools, so more than one turn means the CLI resumed a reply that
+        # hit the output limit, and `result` holds only the last piece.
+        or payload.get("num_turns", 1) > 1
     )
 
 
@@ -483,74 +500,83 @@ def run_evaluations(args: argparse.Namespace) -> int:
     if args.budget_usd <= 0 or args.budget_usd > 25:
         raise ValueError("--budget-usd must be greater than 0 and no more than 25")
 
+    lock = threading.Lock()
+    halt = threading.Event()
+    exhausted = threading.Event()
+    call_cap = runner.get("max_call_usd")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("a", encoding="utf-8") as destination:
-        for trial in range(1, args.trials + 1):
-            for case in cases:
-                if args.case and case["id"] not in args.case:
-                    continue
-                key = (case["id"], trial, args.condition, args.runner)
-                if key in done:
-                    print(f"skip completed {args.condition} trial {trial}: {case['id']}")
-                    continue
-                prompt = _condition_prompt(case["prompt"], args.condition, args.condition_skill)
-                row_key = dict(zip(("case_id", "trial", "condition", "runner"), key))
-                completed = None
-                generated = False
-                for attempt in range(args.retries + 1):
-                    # Inside the loop because a failed attempt can still bill.
+        def generate(trial: int, case: dict[str, Any]) -> None:
+            nonlocal reported_cost
+            key = (case["id"], trial, args.condition, args.runner)
+            if key in done:
+                print(f"skip completed {args.condition} trial {trial}: {case['id']}")
+                return
+            prompt = _condition_prompt(case["prompt"], args.condition, args.condition_skill)
+            row_key = dict(zip(("case_id", "trial", "condition", "runner"), key))
+            completed = None
+            generated = False
+            for attempt in range(args.retries + 1):
+                # Inside the loop because a failed attempt can still bill.
+                with lock:
                     remaining = args.budget_usd - reported_cost
-                    if remaining <= 0:
-                        print("Budget exhausted; stopping.", file=sys.stderr)
-                        return 2
-                    invocation = [*command]
-                    if runner.get("budget_flag"):
-                        invocation.extend([runner["budget_flag"], f"{remaining:.4f}"])
-                    invocation.append(prompt)
-                    with _neutral_cwd() as cwd:
-                        completed = subprocess.run(
-                            invocation,
-                            check=False,
-                            capture_output=True,
-                            text=True,
-                            cwd=cwd,
-                            stdin=subprocess.DEVNULL,
-                        )
-                    if completed.returncode == 0:
-                        try:
-                            text, usage, cost = _parse_response(completed.stdout, response_format)
-                            generated = not _attempt_failed(completed.stdout, response_format)
-                        except (ValueError, AttributeError):
-                            generated = False
-                        if generated:
-                            cost = _reported_cost(cost)
-                            break
-                    failed_cost = attempt_cost(completed.stdout, response_format)
-                    if failed_cost is not None:
+                if remaining <= 0:
+                    print("Budget exhausted; stopping.", file=sys.stderr)
+                    exhausted.set()
+                    halt.set()
+                    return
+                invocation = [*command]
+                if runner.get("budget_flag"):
+                    invocation.extend(
+                        [runner["budget_flag"], f"{call_budget(remaining, call_cap):.4f}"]
+                    )
+                invocation.append(prompt)
+                with _neutral_cwd() as cwd:
+                    completed = subprocess.run(
+                        invocation,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        cwd=cwd,
+                        stdin=subprocess.DEVNULL,
+                    )
+                if completed.returncode == 0:
+                    try:
+                        text, usage, cost = _parse_response(completed.stdout, response_format)
+                        generated = not _attempt_failed(completed.stdout, response_format)
+                    except (ValueError, AttributeError):
+                        generated = False
+                    if generated:
+                        cost = _reported_cost(cost)
+                        break
+                failed_cost = attempt_cost(completed.stdout, response_format)
+                if failed_cost is not None:
+                    with lock:
                         reported_cost += failed_cost
                         failed_costs[key] += failed_cost
                         record_failed_spend(args.output, row_key, failed_cost)
-                    if attempt < args.retries:
-                        time.sleep(min(2**attempt, 5))
-                assert completed is not None
-                if not generated:
-                    detail = completed.stderr.strip() or completed.stdout.strip() or "empty response"
-                    if completed.stdout.strip():
-                        try:
-                            parsed_text, _, _ = _parse_response(completed.stdout, response_format)
-                            detail = parsed_text or detail
-                        except (ValueError, AttributeError):
-                            pass
-                    raise RuntimeError(
-                        f"Runner failed after {args.retries + 1} attempts "
-                        f"({shlex.join(invocation[:-1])}):\n{detail}\n"
-                        f"Reported cost so far: ${reported_cost:.4f}"
-                    )
-                if cost is None and not args.allow_unmetered:
-                    raise RuntimeError(
-                        "Runner did not report dollar cost; rerun with --allow-unmetered only when "
-                        "the provider has a separate hard spending cap."
-                    )
+                if attempt < args.retries:
+                    time.sleep(min(2**attempt, 5))
+            assert completed is not None
+            if not generated:
+                detail = completed.stderr.strip() or completed.stdout.strip() or "empty response"
+                if completed.stdout.strip():
+                    try:
+                        parsed_text, _, _ = _parse_response(completed.stdout, response_format)
+                        detail = parsed_text or detail
+                    except (ValueError, AttributeError):
+                        pass
+                raise RuntimeError(
+                    f"Runner failed after {args.retries + 1} attempts "
+                    f"({shlex.join(invocation[:-1])}):\n{detail}\n"
+                    f"Reported cost so far: ${reported_cost:.4f}"
+                )
+            if cost is None and not args.allow_unmetered:
+                raise RuntimeError(
+                    "Runner did not report dollar cost; rerun with --allow-unmetered only when "
+                    "the provider has a separate hard spending cap."
+                )
+            with lock:
                 reported_cost += float(cost or 0)
                 row = {
                     **row_key,
@@ -560,7 +586,29 @@ def run_evaluations(args: argparse.Namespace) -> int:
                 }
                 destination.write(json.dumps(row, ensure_ascii=False) + "\n")
                 destination.flush()
-                print(f"{args.condition} trial {trial}: {case['id']}")
+            print(f"{args.condition} trial {trial}: {case['id']}")
+
+        def generate_unless_halted(trial: int, case: dict[str, Any]) -> None:
+            if halt.is_set():
+                return
+            try:
+                generate(trial, case)
+            except Exception:
+                halt.set()
+                raise
+
+        # Leaving the pool waits for calls in flight, so their rows are written before any raise.
+        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+            futures = [
+                pool.submit(generate_unless_halted, trial, case)
+                for trial in range(1, args.trials + 1)
+                for case in cases
+                if not args.case or case["id"] in args.case
+            ]
+        for future in futures:
+            future.result()
+    if exhausted.is_set():
+        return 2
     print(f"Reported cost: ${reported_cost:.4f}")
     return 0
 
@@ -590,6 +638,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--runner-config", type=Path, default=ROOT / "evals" / "runners.example.json")
     run.add_argument("--runner", required=True)
     run.add_argument("--condition", choices=sorted(CONDITIONS), required=True)
+    run.add_argument("--parallel", type=positive_int, default=1, help="Calls at once (1-16)")
     run.add_argument("--condition-skill", type=Path)
     run.add_argument("--case", action="append")
     run.add_argument("--trials", type=int, default=3)

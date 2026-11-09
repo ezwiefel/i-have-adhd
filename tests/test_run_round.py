@@ -114,6 +114,7 @@ class ValidationTest(RoundTestCase):
         self.assert_rejected("--scenarios=../evil")
         self.assert_rejected("--budget-usd=26")
         self.assert_rejected("--budget-usd=nan")
+        self.assert_rejected("--parallel=0")
         self.assert_rejected("--trials=0")
 
     def test_paths_outside_the_workspace_are_rejected(self):
@@ -336,6 +337,58 @@ class SetupRecordTest(RoundTestCase):
         code, _, err = self.run_cli()
         self.assertEqual(1, code)
         self.assertIn("judges", err)
+
+    def set_runner_limits(self, name, **limits):
+        config = json.loads((self.ws / "runners.stub.json").read_text("utf-8"))
+        config[name].update(limits)
+        (self.ws / "runners.stub.json").write_text(json.dumps(config), encoding="utf-8")
+
+    def test_runner_env_reaches_the_call_and_is_recorded(self):
+        own_log = self.ws / "generator-only.log"
+        self.set_runner_limits("stub", env={"STUB_CALL_LOG": str(own_log)}, max_call_usd=0.25)
+
+        code, _, err = self.run_cli()
+
+        self.assertEqual(0, code, err)
+        self.assertIn("generate", own_log.read_text("utf-8"))
+        expected = {"env": {"STUB_CALL_LOG": str(own_log)}, "max_call_usd": 0.25}
+        self.assertEqual(expected, self.meta()["limits"])
+        self.assertEqual(expected, self.meta("shared")["sets"][str(TRIALS)]["limits"])
+
+    def test_generator_limit_change_is_refused_on_resume(self):
+        self.set_runner_limits("stub", max_call_usd=0.25)
+        self.assertEqual(0, self.run_cli()[0])
+        self.set_runner_limits("stub", max_call_usd=0.5)
+
+        code, _, err = self.run_cli()
+
+        self.assertEqual(1, code)
+        self.assertIn("limits", err)
+
+    def test_judge_limit_change_is_refused_on_resume(self):
+        self.set_runner_limits("stub-judge-a", max_call_usd=0.25)
+        self.assertEqual(0, self.run_cli()[0])
+        self.set_runner_limits("stub-judge-a", max_call_usd=0.5)
+
+        code, _, err = self.run_cli()
+
+        self.assertEqual(1, code)
+        self.assertIn("judges", err)
+
+    def test_parallel_round_writes_the_same_rows(self):
+        code, _, err = self.run_cli("--parallel=3")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual(2 * len(self.cases) * TRIALS, len(self.rows_for("c1", "baseline", "comparator")))
+
+    def test_secret_in_runner_env_is_refused_before_it_reaches_meta(self):
+        self.set_runner_limits("stub", env={"SOME_API_KEY": "sk-long-enough-value"})
+
+        code, _, err = self.run_cli()
+
+        self.assertEqual(1, code)
+        self.assertIn("SOME_API_KEY", err)
+        self.assertNotIn("sk-long-enough-value", err)
 
     def test_workspace_is_required(self):
         argv = ["--round", "r1", "--generator-runner", "stub", "--judges", "x", "--budget-usd", "1"]

@@ -2,7 +2,9 @@ import contextlib
 import io
 import json
 import sys
+import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -550,6 +552,49 @@ class BudgetTest(unittest.TestCase):
 
     def judged_cases(self):
         return sorted({row["case_id"] for row in run_evals.read_jsonl(self.output)})
+
+    def test_max_call_usd_caps_the_budget_flag_of_one_call(self):
+        self.write_runner(0.01, budget_flag="--max-budget-usd")
+        config = json.loads(self.runner_config.read_text())
+        config["stub"]["max_call_usd"] = 0.25
+        self.runner_config.write_text(json.dumps(config))
+
+        self.assertEqual(0, self.judge("--budget-usd", "1"))
+
+        self.assertIn("--max-budget-usd 0.2500", self.call_log()[0])
+
+    def test_parallel_groups_overlap_and_costs_add_up(self):
+        self.write_runner(0.01)
+        reply = json.dumps(
+            {"result": json.dumps({"A": self.VERDICT, "B": self.VERDICT}), "usage": {}, "total_cost_usd": 0.1}
+        )
+        barrier = threading.Barrier(3, timeout=5)
+
+        def answer(*_, **__):
+            barrier.wait()  # Passes only when three groups are in flight together.
+            return subprocess.CompletedProcess(["stub"], 0, reply, "")
+
+        stdout = io.StringIO()
+        with mock.patch.object(judge.subprocess, "run", side_effect=answer), (
+            contextlib.redirect_stdout(stdout)
+        ):
+            code = self.judge("--parallel", "3", "--budget-usd", "1")
+
+        self.assertEqual(0, code)
+        self.assertEqual(["one", "three", "two"], self.judged_cases())
+        self.assertEqual(6, len(run_evals.read_jsonl(self.output)))
+        self.assertIn("Reported judge cost: $0.3000", stdout.getvalue())
+
+    def test_parallel_budget_stop_keeps_finished_groups(self):
+        self.write_inputs(tuple(f"case-{index}" for index in range(8)))
+        self.write_runner(0.6)
+
+        code, stderr = self.judge_quietly("--parallel", "2", "--budget-usd", "1")
+
+        self.assertEqual(2, code)
+        self.assertIn("Budget exhausted", stderr)
+        self.assertLessEqual(len(self.call_log()), 3)  # Two past the check, at most one more.
+        self.assertEqual(len(self.call_log()), len(self.judged_cases()))
 
     def test_budget_stop_halts_at_the_cap_and_keeps_completed_groups(self):
         self.write_runner(0.6)

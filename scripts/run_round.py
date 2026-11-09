@@ -39,10 +39,10 @@ COMPARE_PAIRS = (
     ("comparator", "candidate"),
 )
 ROUND_ZERO_FOLDER = "v0"
-SHARED_SETUP = ("runner", "model", "cli_version", "effort", "comparator", "case_set")
+SHARED_SETUP = ("runner", "model", "cli_version", "effort", "limits", "comparator", "case_set")
 VARIANT_SETUP = (
-    "skills", "runner", "model", "cli_version", "effort", "trials", "case_set", "rubric_sha256",
-    "judges",
+    "skills", "runner", "model", "cli_version", "effort", "limits", "trials", "case_set",
+    "rubric_sha256", "judges",
 )
 SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.IGNORECASE)
 
@@ -192,7 +192,18 @@ def _runner_env(runner: Optional[dict[str, Any]]) -> dict[str, str]:
     if runner and runner.get("path_prepend"):
         prepend = runner["path_prepend"].replace("{root}", str(ROOT))
         env["PATH"] = prepend + os.pathsep + env.get("PATH", "")
+    if runner:
+        env.update(runner.get("env") or {})
     return env
+
+
+def _limits(runner: dict[str, Any]) -> dict[str, Any]:
+    """The per-call limits of a runner. They shape replies, so they are part of the setup."""
+    for name, value in (runner.get("env") or {}).items():
+        # Same test as _scrub: meta.json is committed, so no secret may sit in a runner's env.
+        if len(value) >= 8 and SECRET_NAME.search(name):
+            raise RoundError(f"runner env {name} looks like a secret; keep it out of the config")
+    return {key: runner[key] for key in ("env", "max_call_usd") if key in runner}
 
 
 def _step(
@@ -382,6 +393,8 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
     workspace = args.workspace.resolve()
     if not workspace.is_dir():
         raise RoundError(f"workspace is not a directory: {args.workspace}")
+    if not 1 <= args.parallel <= 16:
+        raise RoundError("--parallel must be from 1 to 16")
     round_name = _name(args.round, "round")
     variant, candidate_ref = _parse_variant(args.variant)
     comparator_ref = _ref(args.comparator_ref)
@@ -451,7 +464,7 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
         skills=skills, config=config, config_path=config_path, cases_path=cases_path,
         rubric_path=rubric_path, generator=generator, runner=config[generator], model=model,
         effort=_flag(command, "--effort"), judges=judges, unmetered=unmetered,
-        scenarios=scenarios, trials=args.trials, retries=args.retries,
+        scenarios=scenarios, trials=args.trials, retries=args.retries, parallel=args.parallel,
         expected_rows=len(cases) * args.trials, budget=args.budget_usd,
         scenario_budget=args.scenario_budget_usd,
         case_set={
@@ -481,7 +494,8 @@ def _load_meta(path: Path) -> dict[str, Any]:
 def _shared_record(plan: SimpleNamespace) -> dict[str, Any]:
     return {
         "runner": plan.generator, "model": plan.model, "cli_version": plan.cli_version,
-        "effort": plan.effort, "comparator": plan.skills["comparator"], "case_set": plan.case_set,
+        "effort": plan.effort, "limits": _limits(plan.runner),
+        "comparator": plan.skills["comparator"], "case_set": plan.case_set,
     }
 
 
@@ -504,12 +518,17 @@ def _base_meta(plan: SimpleNamespace, public_sha: str) -> dict[str, Any]:
         "model": plan.model,
         "cli_version": plan.cli_version,
         "effort": plan.effort,
+        "limits": _limits(plan.runner),
         "trials": plan.trials,
         "case_set": plan.case_set,
         "rubric_sha256": plan.rubric_sha256,
         "scenarios": plan.scenarios,
         "judges": [
-            {"runner": name, "model": _judge_model(plan.config, name)}
+            {
+                "runner": name,
+                "model": _judge_model(plan.config, name),
+                **({"limits": _limits(plan.config[name])} if _limits(plan.config[name]) else {}),
+            }
             for name in plan.judges
         ],
         "budget_usd": plan.budget,
@@ -556,6 +575,7 @@ def _generate(plan: SimpleNamespace, condition: str, output: Path, skill: Option
         *(["--condition-skill", skill] if skill else []),
         "--trials", plan.trials,
         "--retries", plan.retries,
+        "--parallel", plan.parallel,
         "--budget-usd", plan.budget,
         "--output", output,
         runner=plan.runner,
@@ -621,6 +641,7 @@ def _judge_and_report(
             "--runner", name,
             "--conditions", *plan.conditions,
             "--retries", plan.retries,
+            "--parallel", plan.parallel,
             "--budget-usd", budget,
             *(["--allow-unmetered"] if name in plan.unmetered else []),
             "--output", path,
@@ -682,7 +703,7 @@ def run_round(args: argparse.Namespace) -> int:
     plan = _prepare(args)
     spent = reported_spend(plan.results)
     caps = _run_caps(plan)
-    # Runners can overshoot a cap by one call, so reaching the limit counts as crossing it.
+    # Runners can overshoot a cap by one call per worker, so reaching the limit counts as crossing it.
     if spent + caps >= SPEND_LIMIT_USD:
         raise RoundError(
             f"reported spend ${spent:.2f} plus this run's caps ${caps:.2f} would reach "
@@ -723,6 +744,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add("--scenarios", default="", help="Comma-separated names under evals/scenarios")
     add("--trials", type=int, default=3)
     add("--retries", type=int, default=2)
+    add("--parallel", type=int, default=1, help="Calls at once (1-16)")
     add("--change", help="Change ID for the targeted numbers in candidate compare reports")
     add("--runner-config", type=Path, help="Inside the workspace; default runners.example.json")
     add("--cases", type=Path, help="Inside the workspace; default evals/cases.jsonl")

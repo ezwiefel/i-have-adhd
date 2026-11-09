@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -45,7 +46,10 @@ class EvaluationHarnessTest(unittest.TestCase):
         }
         self.assertEqual(claude, runners["claude"])
         model_at = claude["command"].index("--model") + 1
-        for model in ("claude-opus-5-5", "claude-fable-5-1"):
+        limits = {"env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8000"}, "max_call_usd": 0.25}
+        for model, extra in (
+            ("claude-opus-5-5", limits), ("claude-sonnet-5-5", limits), ("claude-fable-5-1", {}),
+        ):
             with self.subTest(model=model):
                 command = [
                     *claude["command"][:model_at],
@@ -54,7 +58,7 @@ class EvaluationHarnessTest(unittest.TestCase):
                     "medium",
                     *claude["command"][model_at + 1:],
                 ]
-                self.assertEqual({**claude, "command": command}, runners[model])
+                self.assertEqual({**claude, "command": command, **extra}, runners[model])
 
 
     def test_parse_response_tolerates_output_after_the_json_document(self):
@@ -110,6 +114,7 @@ class EvaluationHarnessTest(unittest.TestCase):
                 case=None,
                 trials=1,
                 retries=0,
+                parallel=1,
                 budget_usd=1.0,
                 allow_unmetered=False,
                 output=output,
@@ -129,7 +134,9 @@ class EvaluationHarnessTest(unittest.TestCase):
             self.assertEqual(1, runner.call_count)
             self.assertIs(subprocess.DEVNULL, runner.call_args.kwargs.get("stdin"))
 
-    def _run_with_stubbed_cli(self, root, responses, retries=1, budget_usd=1.0, budget_flag=None):
+    def _run_with_stubbed_cli(
+        self, root, responses, retries=1, budget_usd=1.0, budget_flag=None, max_call_usd=None
+    ):
         """Run one baseline case with each CLI call returning the next stubbed payload."""
         cases = root / "cases.jsonl"
         cases.write_text(
@@ -148,6 +155,8 @@ class EvaluationHarnessTest(unittest.TestCase):
         runner = {"command": ["stub-runner"], "response_format": "claude-json"}
         if budget_flag:
             runner["budget_flag"] = budget_flag
+        if max_call_usd:
+            runner["max_call_usd"] = max_call_usd
         runners = root / "runners.json"
         runners.write_text(json.dumps({"stub": runner}), encoding="utf-8")
         args = argparse.Namespace(
@@ -159,6 +168,7 @@ class EvaluationHarnessTest(unittest.TestCase):
             case=None,
             trials=1,
             retries=retries,
+            parallel=1,
             budget_usd=budget_usd,
             allow_unmetered=False,
             output=root / "responses.jsonl",
@@ -186,6 +196,8 @@ class EvaluationHarnessTest(unittest.TestCase):
             "whitespace": {"result": " \n", "total_cost_usd": 0.01},
             "null": {"result": None, "total_cost_usd": 0.01},
             "missing": {"total_cost_usd": 0.01},
+            # With no tools a reply is one turn; more means the CLI resumed one cut off at the limit.
+            "resumed reply": {"num_turns": 4, "result": "150 151", "total_cost_usd": 0.01},
         }
         for name, payload in failures.items():
             with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
@@ -196,6 +208,16 @@ class EvaluationHarnessTest(unittest.TestCase):
                 self.assertEqual(2, len(self.calls))
                 self.assertEqual(set(), run_evals.completed_keys(
                     run_evals.read_jsonl(root / "responses.jsonl")))
+
+    def test_max_call_usd_caps_the_budget_flag_of_one_call(self):
+        reply = {"result": "102", "usage": {}, "total_cost_usd": 0.02}
+        for budget, expected in ((1.0, "0.2500"), (0.1, "0.1000")):
+            with self.subTest(budget=budget), tempfile.TemporaryDirectory() as tmp:
+                self._run_with_stubbed_cli(
+                    Path(tmp), [reply], budget_usd=budget,
+                    budget_flag="--max-budget-usd", max_call_usd=0.25,
+                )
+                self.assertEqual(expected, self.calls[0][self.calls[0].index("--max-budget-usd") + 1])
 
     def test_failed_generation_error_reports_provider_text_and_cost(self):
         payload = {"is_error": True, "result": "overloaded", "total_cost_usd": 0.01}
@@ -337,6 +359,7 @@ class EvaluationHarnessTest(unittest.TestCase):
                 case=["direct-answer"],
                 trials=1,
                 retries=0,
+                parallel=1,
                 budget_usd=1.0,
                 allow_unmetered=True,
                 output=output,
@@ -786,6 +809,7 @@ class EvaluationHarnessTest(unittest.TestCase):
                 case=["direct-answer"],
                 trials=1,
                 retries=0,
+                parallel=1,
                 budget_usd=1.0,
                 allow_unmetered=False,
                 output=tmp_path / "out.jsonl",
@@ -821,6 +845,7 @@ class EvaluationHarnessTest(unittest.TestCase):
                 case=["direct-answer"],
                 trials=1,
                 retries=0,
+                parallel=1,
                 budget_usd=1.0,
                 allow_unmetered=True,
                 output=output,
@@ -846,6 +871,72 @@ class EvaluationHarnessTest(unittest.TestCase):
             {("direct-answer", 1, "baseline", "claude")},
             run_evals.completed_keys(rows),
         )
+
+
+
+class ParallelGenerationTest(unittest.TestCase):
+    REPLY = json.dumps({"result": "ok", "usage": {}, "total_cost_usd": 0.01})
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.output = self.root / "responses.jsonl"
+
+    def args(self, case_count, parallel, budget=1.0):
+        cases = self.root / "cases.jsonl"
+        cases.write_text("".join(
+            json.dumps({
+                "id": f"case-{index}", "category": "direct-answer", "prompt": f"Prompt {index}",
+                "risk": "low", "criteria": ["c"],
+            }) + "\n"
+            for index in range(case_count)
+        ), encoding="utf-8")
+        runners = self.root / "runners.json"
+        runners.write_text(json.dumps(
+            {"stub": {"command": ["stub-runner"], "response_format": "claude-json"}}
+        ), encoding="utf-8")
+        return argparse.Namespace(
+            cases=cases, runner_config=runners, runner="stub", condition="baseline",
+            condition_skill=None, case=None, trials=1, retries=0, parallel=parallel,
+            budget_usd=budget, allow_unmetered=False, output=self.output,
+        )
+
+    def done(self, stdout=REPLY):
+        return subprocess.CompletedProcess(["stub-runner"], 0, stdout, "")
+
+    def test_calls_overlap_and_each_row_is_written_once(self):
+        barrier = threading.Barrier(3, timeout=5)
+
+        def reply(*_, **__):
+            barrier.wait()  # Passes only when three calls are in flight together.
+            return self.done()
+
+        with mock.patch.object(run_evals.subprocess, "run", side_effect=reply):
+            self.assertEqual(0, run_evals.run_evaluations(self.args(3, parallel=3)))
+
+        ids = [row["case_id"] for row in run_evals.read_jsonl(self.output)]
+        self.assertEqual(["case-0", "case-1", "case-2"], sorted(ids))
+
+    def test_budget_stops_new_calls_and_keeps_finished_rows(self):
+        cost = json.dumps({"result": "ok", "usage": {}, "total_cost_usd": 0.6})
+        with mock.patch.object(
+            run_evals.subprocess, "run", side_effect=lambda *_, **__: self.done(cost)
+        ) as runner:
+            code = run_evals.run_evaluations(self.args(8, parallel=2))
+
+        self.assertEqual(2, code)
+        self.assertLessEqual(runner.call_count, 3)  # Two in flight past the check, at most one more.
+        self.assertEqual(runner.call_count, len(run_evals.read_jsonl(self.output)))
+
+    def test_failure_stops_new_calls_and_is_raised(self):
+        failed = subprocess.CompletedProcess(["stub-runner"], 1, "", "boom")
+        with mock.patch.object(run_evals.subprocess, "run", return_value=failed) as runner, (
+            mock.patch.object(run_evals.time, "sleep")
+        ), self.assertRaisesRegex(RuntimeError, "boom"):
+            run_evals.run_evaluations(self.args(8, parallel=2))
+
+        self.assertLess(runner.call_count, 8)
 
 
 if __name__ == "__main__":
