@@ -23,6 +23,39 @@ class EvaluationHarnessTest(unittest.TestCase):
         self.assertGreaterEqual(len(cases), 12)
         self.assertGreaterEqual(len({case["category"] for case in cases}), 8)
 
+    def test_pinned_runners_copy_the_claude_isolation_and_leave_it_unchanged(self):
+        runners = json.loads((ROOT / "evals" / "runners.example.json").read_text(encoding="utf-8"))
+        claude = {
+            "command": [
+                "claude",
+                "--disable-slash-commands",
+                "--print",
+                "--output-format",
+                "json",
+                "--no-session-persistence",
+                "--setting-sources",
+                "",
+                "--model",
+                "claude-opus-4-8",
+                "--tools",
+                "",
+            ],
+            "response_format": "claude-json",
+            "budget_flag": "--max-budget-usd",
+        }
+        self.assertEqual(claude, runners["claude"])
+        model_at = claude["command"].index("--model") + 1
+        for model in ("claude-opus-5-5", "claude-fable-5-1"):
+            with self.subTest(model=model):
+                command = [
+                    *claude["command"][:model_at],
+                    model,
+                    "--effort",
+                    "medium",
+                    *claude["command"][model_at + 1:],
+                ]
+                self.assertEqual({**claude, "command": command}, runners[model])
+
 
     def test_parse_response_tolerates_output_after_the_json_document(self):
         """The CLI can emit a notice after its JSON result; the first document still wins."""
