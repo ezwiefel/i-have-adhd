@@ -307,10 +307,33 @@ class ResponsesFromTest(RoundTestCase):
             spent + meta["reported_costs"]["total_usd"], run_round.reported_spend(self.results)
         )
 
+    def test_scenarios_add_shared_captures_to_the_source_round_and_count_once(self):
+        cost = {"STUB_COST_USD": "0.01"}
+        self.assertEqual(0, self.run_cli(variant="", env=cost)[0])
+        shared = self.results / "r1" / "shared"
+        rows = (shared / f"responses-t{TRIALS}.jsonl").read_bytes()
+        spent = run_round.reported_spend(self.results)
+
+        code, _, err = self.run_cli(
+            "--round=r2", "--responses-from=r1", f"--scenarios={SCENARIO}", env=cost
+        )
+
+        self.assertEqual(0, code, err)
+        self.assertEqual(rows, (shared / f"responses-t{TRIALS}.jsonl").read_bytes())
+        self.assertTrue((shared / "scenarios" / SCENARIO / "baseline-1.jsonl").exists())
+        self.assertFalse((self.results / "r2" / "shared").exists())
+        shared_meta = json.loads((shared / "meta.json").read_text("utf-8"))
+        self.assertEqual("complete", shared_meta["status"])
+        self.assertGreater(shared_meta["reported_costs"]["scenarios_usd"], 0)
+        added = shared_meta["reported_costs"]["scenarios_usd"]
+        self.assertAlmostEqual(
+            spent + added + self.meta("c1", "r2")["reported_costs"]["total_usd"],
+            run_round.reported_spend(self.results),
+        )
+
     def test_unusable_sources_are_refused(self):
         self.assertEqual(0, self.run_cli(variant="")[0])
-        for extra in (("--responses-from=r1",), ("--round=r2", "--responses-from=nope"),
-                      ("--round=r2", "--responses-from=r1", "--scenarios=x")):
+        for extra in (("--responses-from=r1",), ("--round=r2", "--responses-from=nope")):
             with self.subTest(extra=extra):
                 code, _, err = self.run_cli(*extra, variant="")
                 self.assertEqual(1, code)

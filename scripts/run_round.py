@@ -439,8 +439,8 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
         raise RoundError(f"cannot determine the model of generator runner {generator}")
     scenarios = _comma_list(args.scenarios, "scenario")
     responses_from = _name(args.responses_from, "--responses-from round") if args.responses_from else None
-    if responses_from and (scenarios or responses_from == round_name):
-        raise RoundError("--responses-from must name another round and cannot run scenarios")
+    if responses_from == round_name:
+        raise RoundError("--responses-from must name another round")
     # run_scenario_eval always drives `claude --model <model>` itself.
     if scenarios and command[0] != "claude":
         raise RoundError("scenarios need a claude generator runner")
@@ -572,8 +572,8 @@ def _write_meta(plan: SimpleNamespace, status: str) -> None:
 
 
 def _write_shared_meta(plan: SimpleNamespace, status: str) -> None:
-    if plan.responses_from:
-        return  # another round's folder, left as it was
+    if plan.responses_from and not plan.scenarios:
+        return  # another round's folder: only new scenario captures change it
     path = plan.shared_dir / "meta.json"
     sets = _load_meta(path).get("sets", {})
     sets[str(plan.trials)] = _shared_record(plan)

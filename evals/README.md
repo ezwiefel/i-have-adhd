@@ -228,11 +228,13 @@ the skill, runner, model, CLI version, cases, trials, rubric or judge models is 
 and so is a change to the comparator or shared setup at any trial count, because scenario
 captures are shared across trial counts; use a new round name.
 
-To judge an earlier round's replies again, for example under a new rubric or with other
-judges, give a new round name and `--responses-from <earlier round>`. The new round reads
-that round's `shared/` rows in place, generates nothing, and leaves that folder unchanged,
-so the generation spend is still counted once. The earlier round's shared setup must
-match, as on any resume. It cannot be combined with `--scenarios`.
+To reuse an earlier round's baseline and comparator replies, give a new round name and
+`--responses-from <earlier round>`. This judges them again (for example under a new rubric)
+or adds a candidate variant without regenerating them. The new round reads that round's
+`shared/` rows in place and never changes them, so their generation spend is counted once. The earlier round's shared setup must
+match, as on any resume. With `--scenarios`, the baseline and comparator scenario captures go
+into that earlier round's `shared/` folder, like any shared rows, and its `meta.json` counts
+their spend.
 
 A generator runner must have a determinable model (a `--model` flag or a `"model"` key in
 the runner config). A judge's recorded model is that flag, then that key, then the runner
