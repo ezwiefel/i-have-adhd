@@ -114,7 +114,10 @@ def run_scenario(args: argparse.Namespace) -> int:
             command = [
                 "claude", "--safe-mode", "--strict-mcp-config", "--print",
                 "--output-format", "json", "--model", args.model,
-                *(["--effort", args.effort] if args.effort else []), "--tools", "",
+                *(["--effort", args.effort] if args.effort else []),
+                # Keep the generator's no-tools note, so captures match its single-turn rows.
+                *(["--append-system-prompt", args.system_note] if args.system_note else []),
+                "--tools", "",
                 "--resume" if index else "--session-id", session_id,
                 "--max-budget-usd", f"{remaining:.6f}",
                 first_prompt if index == 0 else turn["prompt"],
@@ -153,6 +156,7 @@ def main() -> int:
     run.add_argument("--model", required=True)
     run.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
     run.add_argument("--trial", type=int, default=1)
+    run.add_argument("--system-note", help="Appended to the system prompt on every turn")
     run.add_argument("--budget-usd", type=float, required=True)
     run.add_argument("--output", type=pathlib.Path, required=True)
     args = parser.parse_args()

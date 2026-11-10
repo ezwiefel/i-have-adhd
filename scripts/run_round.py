@@ -461,8 +461,9 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
     results = workspace / "results"
     # Rejudging reads another round's shared rows in place, so their spend is counted once.
     shared_dir = _inside(results / (responses_from or round_name) / "shared", workspace)
-    if responses_from and _load_meta(shared_dir / "meta.json").get("status") != "complete":
-        raise RoundError(f"--responses-from {responses_from}: its shared rows are not complete")
+    # Rows, not status: a failed scenario capture marks the folder failed but leaves its rows whole.
+    if responses_from and not (shared_dir / f"responses-t{args.trials}.jsonl").exists():
+        raise RoundError(f"--responses-from {responses_from}: it has no {args.trials}-trial rows")
     variant_dir = _inside(results / round_name / variant, workspace)
     for directory in (shared_dir, variant_dir):
         if directory.exists() and any(path.is_symlink() for path in directory.rglob("*")):
@@ -649,6 +650,7 @@ def _run_scenarios(plan: SimpleNamespace) -> None:
             *(["--condition-skill", skill] if skill else []),
             "--model", plan.model,
             *(["--effort", plan.effort] if plan.effort else []),
+            *(["--system-note", note] if (note := _limits(plan.runner).get("system_note")) else []),
             "--trial", trial,
             "--budget-usd", plan.scenario_budget,
             "--output", path,

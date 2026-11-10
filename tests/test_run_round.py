@@ -331,6 +331,17 @@ class ResponsesFromTest(RoundTestCase):
             run_round.reported_spend(self.results),
         )
 
+    def test_a_failed_scenario_status_does_not_block_reusing_whole_rows(self):
+        self.assertEqual(0, self.run_cli(variant="")[0])
+        meta_path = self.results / "r1" / "shared" / "meta.json"
+        meta_path.write_text(
+            json.dumps({**json.loads(meta_path.read_text("utf-8")), "status": "failed"}), "utf-8"
+        )
+
+        code, _, err = self.run_cli("--round=r2", "--responses-from=r1", variant="")
+
+        self.assertEqual(0, code, err)
+
     def test_unusable_sources_are_refused(self):
         self.assertEqual(0, self.run_cli(variant="")[0])
         for extra in (("--responses-from=r1",), ("--round=r2", "--responses-from=nope")):

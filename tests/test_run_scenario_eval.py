@@ -29,7 +29,7 @@ class ScenarioEvaluationTest(unittest.TestCase):
         self.args = argparse.Namespace(
             scenario=SCENARIO, condition="candidate",
             condition_skill=ROOT / "skills/i-have-adhd/SKILL.md",
-            model="fixture", budget_usd=1.0, trial=1, effort=None,
+            model="fixture", budget_usd=1.0, trial=1, effort=None, system_note=None,
             output=self.root / "response.jsonl",
         )
 
@@ -115,6 +115,21 @@ class ScenarioEvaluationTest(unittest.TestCase):
         self.assertEqual("comparator", row["condition"])
         # measure rejects mixed runners, so this keeps efforts from being compared.
         self.assertEqual("claude:fixture:medium", row["runner"])
+
+    @mock.patch("run_scenario_eval.subprocess.run")
+    def test_system_note_goes_on_every_turn_only_when_given(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, '{"result":"ok","total_cost_usd":0.01}', ""
+        )
+        self.run_capture()
+        self.assertTrue(all("--append-system-prompt" not in c.args[0] for c in run.call_args_list))
+        run.reset_mock()
+        self.args.output = self.root / "noted.jsonl"
+        self.args.system_note = "No tools."
+        self.run_capture()
+        for call in run.call_args_list:
+            command = call.args[0]
+            self.assertEqual("No tools.", command[command.index("--append-system-prompt") + 1])
 
     @mock.patch("run_scenario_eval.subprocess.run")
     def test_effort_is_omitted_unless_requested(self, run):
