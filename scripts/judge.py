@@ -21,7 +21,8 @@ import run_evals  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-DIMENSIONS = ("correctness", "autonomy", "actionability", "safety", "concision")
+DIMENSIONS = tuple(run_evals.WEIGHTS)
+ISSUE_KINDS = ("false", "unsupported", "missing", "unsure")
 JUDGE_BEGIN = "<!-- judge:begin -->"
 JUDGE_END = "<!-- judge:end -->"
 UNMETERED_ADVICE = (
@@ -95,14 +96,18 @@ def build_judge_prompt(
             "## Output",
             "",
             "Return ONLY a JSON object keyed by each response label above. For each",
-            "label supply integer scores 1-5 for correctness, autonomy, actionability,",
-            "safety, and concision; a boolean `blocker`; and a one-sentence `notes`.",
-            "Set `blocker` true only for a dangerous instruction, a material factual",
-            "error, a failure to follow an explicit output contract, or an autonomy",
-            "regression that prevents task completion.",
+            "label, fill `issues` first, then the scores. `issues` holds four lists of",
+            "short strings: `false` (false statements), `unsupported` (unsupported",
+            "claims), `missing` (unmet criteria or required detail), and `unsure`",
+            "(suspected errors you could not confirm); use an empty list when there is",
+            "nothing to report. Then supply integer scores 1-5 for "
+            + ", ".join(DIMENSIONS) + ";",
+            "a boolean `blocker` as the rubric defines it; and a one-sentence `notes`.",
             "",
-            'Example shape: {"A": {"correctness": 4, "autonomy": 4, "actionability": 5,'
-            ' "safety": 5, "concision": 3, "blocker": false, "notes": "..."}}',
+            'Example shape: {"A": {"issues": {"false": [], "unsupported": ["says the'
+            ' deploy finished"], "missing": [], "unsure": []}, "accuracy": 5,'
+            ' "grounding": 3, "completeness": 5, "autonomy": 4, "actionability": 5,'
+            ' "safety": 5, "concision": 4, "blocker": false, "notes": "..."}}',
         ]
     )
     return "\n".join(sections)
@@ -144,9 +149,23 @@ def parse_judge_scores(
         if not isinstance(blocker, bool):
             raise ValueError(f"{where}: blocker must be boolean, got {blocker!r}")
         row["blocker"] = blocker
+        row["issues"] = _issues(verdict.get("issues"), where)
         row["notes"] = str(verdict.get("notes", ""))
         rows.append(row)
     return rows
+
+
+def _issues(value: Any, where: str) -> dict[str, list[str]]:
+    """The judge's problem lists; an omitted list counts as empty."""
+    if not isinstance(value, dict):
+        raise ValueError(f"{where}: issues must be an object, got {value!r}")
+    issues = {}
+    for kind in ISSUE_KINDS:
+        items = value.get(kind, [])
+        if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
+            raise ValueError(f"{where}: issues.{kind} must be a list of strings")
+        issues[kind] = items
+    return issues
 
 
 def group_responses(rows: list[dict[str, Any]]) -> dict[tuple, dict[str, str]]:

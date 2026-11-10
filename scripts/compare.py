@@ -177,7 +177,7 @@ def compare(
                 metric: _paired(
                     _metric_deltas(grouped[reference], grouped[treatment], itemgetter(metric))
                 )
-                for metric in ("correctness", "safety")
+                for metric in run_evals.GATED
             },
         },
         "blockers": {

@@ -18,7 +18,9 @@ def score(condition, level, case_id="case", trial=1, blocker=False, **overrides)
         "case_id": case_id,
         "trial": trial,
         "condition": condition,
-        "correctness": level,
+        "accuracy": level,
+        "grounding": level,
+        "completeness": level,
         "autonomy": level,
         "actionability": level,
         "safety": level,
@@ -93,10 +95,10 @@ class JudgeAgreementTest(unittest.TestCase):
             self.assertEqual(1.0, report["top_condition_agreement"])
 
     def test_tie_is_on_weighted_score_and_survives_float_noise(self):
-        # Different scores, equal weighted totals: +0.35 +0.25 -0.40 -0.10 -0.10.
+        # Different scores, equal weighted totals: +0.20 +0.20 -0.40.
         first = [
             score("baseline", 3),
-            score("candidate", 3, correctness=4, autonomy=4, actionability=1, safety=2, concision=2),
+            score("candidate", 3, accuracy=4, autonomy=4, actionability=1),
         ]
 
         report = judge_agreement.summarize_agreement(first, first)
@@ -105,8 +107,8 @@ class JudgeAgreementTest(unittest.TestCase):
 
     def test_top_condition_follows_the_weights_not_the_raw_sum(self):
         rows = [
-            score("baseline", 3, correctness=5, concision=1),
-            score("candidate", 3, correctness=1, concision=5),
+            score("baseline", 3, accuracy=5, concision=1),
+            score("candidate", 3, accuracy=1, concision=5),
         ]
 
         report = judge_agreement.summarize_agreement(rows, rows)
@@ -142,7 +144,7 @@ class JudgeAgreementTest(unittest.TestCase):
             "mean_absolute_difference"
         ]
 
-        self.assertEqual(0.5, difference["correctness"])
+        self.assertEqual(0.5, difference["accuracy"])
         self.assertEqual(0.5, difference["concision"])
         self.assertEqual(2.0, difference["safety"])
 
@@ -172,7 +174,7 @@ class JudgeAgreementTest(unittest.TestCase):
         self.assertEqual(0, report["shared_groups"])
         self.assertIsNone(report["top_condition_agreement"])
         self.assertIsNone(report["blocker_agreement"])
-        self.assertIsNone(report["mean_absolute_difference"]["correctness"])
+        self.assertIsNone(report["mean_absolute_difference"]["accuracy"])
 
     def test_cost_and_notes_do_not_affect_agreement(self):
         first = group(3, 4, group_cost_usd=0.5, notes="one view")

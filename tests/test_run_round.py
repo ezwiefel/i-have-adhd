@@ -282,7 +282,41 @@ class SharedRowsTest(RoundTestCase):
         self.assertIn("skills", err)
 
 
-class SetupRecordTest(RoundTestCase):
+class ResponsesFromTest(RoundTestCase):
+    def test_rejudge_reads_another_rounds_rows_without_generating_or_changing_them(self):
+        cost = {"STUB_COST_USD": "0.01"}
+        self.assertEqual(0, self.run_cli(variant="", env=cost)[0])
+        shared = self.results / "r1" / "shared"
+        before = {path.name: path.read_bytes() for path in shared.iterdir() if path.is_file()}
+        spent = run_round.reported_spend(self.results)
+        self.calls_log.unlink()
+
+        code, _, err = self.run_cli("--round=r2", "--responses-from=r1", variant="", env=cost)
+
+        self.assertEqual(0, code, err)
+        self.assertEqual(0, self.calls()["generate"])
+        self.assertGreater(self.calls()["judge"], 0)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in shared.iterdir() if p.is_file()})
+        self.assertFalse((self.results / "r2" / "shared").exists())
+        read = lambda name: run_evals.read_jsonl(self.results / name / "v0" / "responses.jsonl")
+        self.assertEqual(read("r1"), read("r2"))
+        meta = self.meta("v0", "r2")
+        self.assertEqual("r1", meta["responses_from"])
+        # Generation spend stays counted once, in r1.
+        self.assertAlmostEqual(
+            spent + meta["reported_costs"]["total_usd"], run_round.reported_spend(self.results)
+        )
+
+    def test_unusable_sources_are_refused(self):
+        self.assertEqual(0, self.run_cli(variant="")[0])
+        for extra in (("--responses-from=r1",), ("--round=r2", "--responses-from=nope"),
+                      ("--round=r2", "--responses-from=r1", "--scenarios=x")):
+            with self.subTest(extra=extra):
+                code, _, err = self.run_cli(*extra, variant="")
+                self.assertEqual(1, code)
+                self.assertIn("responses-from", err)
+
+
     def test_comparator_change_is_refused_whatever_the_trial_count(self):
         (self.ws / "alt.md").write_text("Another comparator.\n", encoding="utf-8")
         self.assertEqual(0, self.run_cli("--trials=1", f"--scenarios={SCENARIO}")[0])

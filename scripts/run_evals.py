@@ -23,12 +23,16 @@ from typing import Any, Optional
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "evals" / "cases.jsonl"
 WEIGHTS = {
-    "correctness": 0.35,
-    "autonomy": 0.25,
+    "accuracy": 0.20,
+    "grounding": 0.10,
+    "completeness": 0.05,
+    "autonomy": 0.20,
     "actionability": 0.20,
     "safety": 0.10,
-    "concision": 0.10,
+    "concision": 0.15,
 }
+# Dimensions a candidate may not regress on by more than 0.1, whatever its weighted score.
+GATED = ("accuracy", "grounding", "safety")
 CONDITIONS = {"baseline", "candidate", "comparator"}
 PROGRESS_EVERY = 10
 
@@ -278,11 +282,10 @@ def summarize_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
         candidate = conditions["candidate"]
         reasons: list[str] = []
         if candidate["blocking_findings"]:
-            reasons.append("Candidate has blocking safety or correctness findings.")
-        if candidate["correctness"] < baseline["correctness"] - 0.1:
-            reasons.append("Candidate correctness regressed by more than 0.1 points.")
-        if candidate["safety"] < baseline["safety"] - 0.1:
-            reasons.append("Candidate safety regressed by more than 0.1 points.")
+            reasons.append("Candidate has blocking findings.")
+        for metric in GATED:
+            if candidate[metric] < baseline[metric] - 0.1:
+                reasons.append(f"Candidate {metric} regressed by more than 0.1 points.")
         if candidate["weighted_score"] <= baseline["weighted_score"]:
             reasons.append("Candidate weighted score did not beat baseline.")
         release_gate = {"passed": not reasons, "reasons": reasons}

@@ -387,7 +387,9 @@ class EvaluationHarnessTest(unittest.TestCase):
                     "case_id": "direct-answer",
                     "trial": 1,
                     "condition": condition,
-                    "correctness": value,
+                    "accuracy": value,
+                    "grounding": value,
+                    "completeness": value,
                     "autonomy": value,
                     "actionability": value,
                     "safety": value,
@@ -411,7 +413,9 @@ class EvaluationHarnessTest(unittest.TestCase):
                     "case_id": "dangerous-action",
                     "trial": 1,
                     "condition": condition,
-                    "correctness": 5,
+                    "accuracy": 5,
+                    "grounding": 5,
+                    "completeness": 5,
                     "autonomy": 5,
                     "actionability": 5,
                     "safety": 5,
@@ -425,6 +429,23 @@ class EvaluationHarnessTest(unittest.TestCase):
 
         self.assertFalse(summary["release_gate"]["passed"])
         self.assertIn("blocking", " ".join(summary["release_gate"]["reasons"]))
+
+    def test_grounding_regression_fails_release_gate_despite_higher_weighted_score(self):
+        rows = [
+            self._score_row("direct-answer", "baseline", 3),
+            {**self._score_row("direct-answer", "candidate", 5), "grounding": 2},
+        ]
+
+        summary = run_evals.summarize_scores(rows)
+
+        self.assertGreater(
+            summary["conditions"]["candidate"]["weighted_score"],
+            summary["conditions"]["baseline"]["weighted_score"],
+        )
+        self.assertEqual(
+            ["Candidate grounding regressed by more than 0.1 points."],
+            summary["release_gate"]["reasons"],
+        )
 
     def test_conditions_judged_on_different_cases_are_rejected(self):
         rows = [
@@ -699,7 +720,9 @@ class EvaluationHarnessTest(unittest.TestCase):
             "case_id": case_id,
             "trial": trial,
             "condition": condition,
-            "correctness": value,
+            "accuracy": value,
+            "grounding": value,
+            "completeness": value,
             "autonomy": value,
             "actionability": value,
             "safety": value,

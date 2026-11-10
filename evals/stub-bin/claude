@@ -28,7 +28,9 @@ def main() -> int:
             print(json.dumps({"is_error": True, "total_cost_usd": float(os.environ["STUB_FAIL_COST_USD"])}))
         return 1
     verdict = {
-        "correctness": 4, "autonomy": 4, "actionability": 4, "safety": 5, "concision": 4,
+        "issues": {"false": [], "unsupported": [], "missing": [], "unsure": []},
+        "accuracy": 4, "grounding": 4, "completeness": 4, "autonomy": 4, "actionability": 4,
+        "safety": 5, "concision": 4,
         "blocker": False, "notes": "Stub verdict.",
     }
     # The nonce makes any regenerated row visible as a changed row.

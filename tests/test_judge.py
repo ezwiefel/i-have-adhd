@@ -69,7 +69,10 @@ class ParseJudgeScoresTest(unittest.TestCase):
     @staticmethod
     def _verdict(value, blocker=False, notes="fixture"):
         return {
-            "correctness": value,
+            "issues": {},
+            "accuracy": value,
+            "grounding": value,
+            "completeness": value,
             "autonomy": value,
             "actionability": value,
             "safety": value,
@@ -86,8 +89,8 @@ class ParseJudgeScoresTest(unittest.TestCase):
         )
 
         by_condition = {row["condition"]: row for row in rows}
-        self.assertEqual(5, by_condition["candidate"]["correctness"])
-        self.assertEqual(2, by_condition["baseline"]["correctness"])
+        self.assertEqual(5, by_condition["candidate"]["accuracy"])
+        self.assertEqual(2, by_condition["baseline"]["accuracy"])
         self.assertTrue(by_condition["baseline"]["blocker"])
         self.assertEqual("direct-answer", by_condition["candidate"]["case_id"])
         self.assertEqual(1, by_condition["candidate"]["trial"])
@@ -99,6 +102,31 @@ class ParseJudgeScoresTest(unittest.TestCase):
             judge.parse_judge_scores(
                 payload, ("direct-answer", 1), {"baseline": "B", "candidate": "A"}
             )
+
+    def test_issue_lists_are_kept_and_omitted_lists_are_empty(self):
+        verdict = self._verdict(4) | {"issues": {"unsupported": ["says the deploy finished"]}}
+        payload = json.dumps({"A": verdict, "B": self._verdict(4)})
+
+        rows = judge.parse_judge_scores(
+            payload, ("direct-answer", 1), {"baseline": "B", "candidate": "A"}
+        )
+
+        issues = {row["condition"]: row["issues"] for row in rows}
+        self.assertEqual(["says the deploy finished"], issues["candidate"]["unsupported"])
+        self.assertEqual([], issues["candidate"]["false"])
+        self.assertEqual({"false": [], "unsupported": [], "missing": [], "unsure": []}, issues["baseline"])
+
+    def test_missing_or_malformed_issues_are_rejected(self):
+        for issues in (None, {"false": "one claim"}, {"missing": [3]}):
+            with self.subTest(issues=issues):
+                verdict = {k: v for k, v in self._verdict(4).items() if k != "issues"}
+                if issues is not None:
+                    verdict["issues"] = issues
+                payload = json.dumps({"A": verdict, "B": self._verdict(4)})
+                with self.assertRaisesRegex(ValueError, "issues"):
+                    judge.parse_judge_scores(
+                        payload, ("direct-answer", 1), {"baseline": "B", "candidate": "A"}
+                    )
 
     def test_json_wrapped_in_code_fences_is_still_parsed(self):
         payload = "```json\n" + json.dumps({"A": self._verdict(4), "B": self._verdict(4)}) + "\n```"
@@ -140,7 +168,7 @@ class GraderRubricTest(unittest.TestCase):
 
         self.assertNotIn("baseline", section)
         self.assertNotIn("candidate", section)
-        self.assertIn("correctness", section)
+        self.assertIn("grounding", section)
 
 
 class PromptTest(unittest.TestCase):
@@ -184,7 +212,10 @@ class NeutralWorkingDirectoryTest(unittest.TestCase):
 
 class EndToEndTest(unittest.TestCase):
     VERDICT = {
-        "correctness": 4,
+        "issues": {},
+        "accuracy": 4,
+        "grounding": 4,
+        "completeness": 4,
         "autonomy": 4,
         "actionability": 4,
         "safety": 5,
@@ -341,7 +372,7 @@ class EndToEndTest(unittest.TestCase):
                                 "-c",
                                 # `blocker` omitted for the casual-message group.
                                 f'p=$(cat); case "$p" in *casual-message*)'
-                                f' echo \'{{"A":{{"correctness":3}},"B":{{"correctness":3}}}}\';;'
+                                f' echo \'{{"A":{{"accuracy":3}},"B":{{"accuracy":3}}}}\';;'
                                 f" *) cat {good};; esac",
                             ],
                             "response_format": "text",
@@ -465,7 +496,10 @@ class EndToEndTest(unittest.TestCase):
 
 class BudgetTest(unittest.TestCase):
     VERDICT = {
-        "correctness": 4,
+        "issues": {},
+        "accuracy": 4,
+        "grounding": 4,
+        "completeness": 4,
         "autonomy": 4,
         "actionability": 4,
         "safety": 5,

@@ -43,7 +43,7 @@ ROUND_ZERO_FOLDER = "v0"
 SHARED_SETUP = ("runner", "model", "cli_version", "effort", "limits", "comparator", "case_set")
 VARIANT_SETUP = (
     "skills", "runner", "model", "cli_version", "effort", "limits", "trials", "case_set",
-    "rubric_sha256", "judges",
+    "rubric_sha256", "judges", "responses_from",
 )
 SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.IGNORECASE)
 
@@ -438,6 +438,9 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
     if not model:
         raise RoundError(f"cannot determine the model of generator runner {generator}")
     scenarios = _comma_list(args.scenarios, "scenario")
+    responses_from = _name(args.responses_from, "--responses-from round") if args.responses_from else None
+    if responses_from and (scenarios or responses_from == round_name):
+        raise RoundError("--responses-from must name another round and cannot run scenarios")
     # run_scenario_eval always drives `claude --model <model>` itself.
     if scenarios and command[0] != "claude":
         raise RoundError("scenarios need a claude generator runner")
@@ -456,7 +459,10 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
         candidate_text, skills["candidate"] = _skill(candidate_ref, workspace)
 
     results = workspace / "results"
-    shared_dir = _inside(results / round_name / "shared", workspace)
+    # Rejudging reads another round's shared rows in place, so their spend is counted once.
+    shared_dir = _inside(results / (responses_from or round_name) / "shared", workspace)
+    if responses_from and _load_meta(shared_dir / "meta.json").get("status") != "complete":
+        raise RoundError(f"--responses-from {responses_from}: its shared rows are not complete")
     variant_dir = _inside(results / round_name / variant, workspace)
     for directory in (shared_dir, variant_dir):
         if directory.exists() and any(path.is_symlink() for path in directory.rglob("*")):
@@ -484,6 +490,7 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
             "cases": len(cases),
         },
         rubric_sha256=_sha256(rubric_path.read_text(encoding="utf-8")),
+        responses_from=responses_from,
     )
 
 
@@ -533,6 +540,7 @@ def _base_meta(plan: SimpleNamespace, public_sha: str) -> dict[str, Any]:
         "trials": plan.trials,
         "case_set": plan.case_set,
         "rubric_sha256": plan.rubric_sha256,
+        "responses_from": plan.responses_from,
         "scenarios": plan.scenarios,
         "judges": [
             {
@@ -564,6 +572,8 @@ def _write_meta(plan: SimpleNamespace, status: str) -> None:
 
 
 def _write_shared_meta(plan: SimpleNamespace, status: str) -> None:
+    if plan.responses_from:
+        return  # another round's folder, left as it was
     path = plan.shared_dir / "meta.json"
     sets = _load_meta(path).get("sets", {})
     sets[str(plan.trials)] = _shared_record(plan)
@@ -698,7 +708,7 @@ def _judge_and_report(
 def _run_stages(plan: SimpleNamespace) -> None:
     plan.started = time.monotonic()
     plan.stages = [
-        *(f"generate {condition}" for condition in plan.conditions),
+        *(f"generate {c}" for c in plan.conditions if c == "candidate" or not plan.responses_from),
         *(["capture scenarios"] if plan.scenarios else []),
         *(f"judge {name}" for name in plan.judges),
         *(f"judge scenario {scenario}" for scenario in plan.scenarios),
@@ -708,9 +718,13 @@ def _run_stages(plan: SimpleNamespace) -> None:
     _write_shared_meta(plan, "running")
     _write_meta(plan, "running")
 
-    _write_atomic(plan.comparator_skill, plan.comparator_text)
-    _generate(plan, "baseline", plan.shared_responses, None)
-    _generate(plan, "comparator", plan.shared_responses, plan.comparator_skill)
+    if not plan.responses_from:
+        _write_atomic(plan.comparator_skill, plan.comparator_text)
+        _generate(plan, "baseline", plan.shared_responses, None)
+        _generate(plan, "comparator", plan.shared_responses, plan.comparator_skill)
+    for condition in SHARED_CONDITIONS:
+        if _missing_rows(plan.shared_responses, condition, plan.expected_rows):
+            raise RoundError(f"{plan.shared_responses}: {condition} rows are incomplete")
     _copy_shared_rows(plan)
     _write_shared_meta(plan, "running")
     _write_meta(plan, "running")
@@ -785,6 +799,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add("--runner-config", type=Path, help="Inside the workspace; default runners.example.json")
     add("--cases", type=Path, help="Inside the workspace; default evals/cases.jsonl")
     add("--rubric", type=Path, help="Inside the workspace; default evals/rubric.md")
+    add("--responses-from", default="", help="Judge another round's baseline and comparator rows")
     return parser
 
 

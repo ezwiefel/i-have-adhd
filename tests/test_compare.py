@@ -19,7 +19,9 @@ def score(condition, level, case_id="case", trial=1, blocker=False, **overrides)
         "case_id": case_id,
         "trial": trial,
         "condition": condition,
-        "correctness": level,
+        "accuracy": level,
+        "grounding": level,
+        "completeness": level,
         "autonomy": level,
         "actionability": level,
         "safety": level,
@@ -118,14 +120,14 @@ class DeltaTest(unittest.TestCase):
     def test_delta_uses_the_weights_not_the_raw_sum(self):
         rows = [
             score("baseline", 3),
-            score("candidate", 3, correctness=5, concision=1),
+            score("candidate", 3, accuracy=5, concision=1),
         ]
 
         weighted = compare.compare(rows, [case("case")], "baseline", "candidate")["overall"][
             "weighted_score"
         ]
 
-        self.assertEqual(0.5, weighted["mean_delta"])  # +2 * 0.35, -2 * 0.10
+        self.assertEqual(0.1, weighted["mean_delta"])  # +2 * 0.20, -2 * 0.15
 
     def test_standard_error_over_one_case_is_null(self):
         weighted = compare.compare(
@@ -151,20 +153,20 @@ class DeltaTest(unittest.TestCase):
 
         self.assertEqual(1.0, report["overall"]["weighted_score"]["mean_delta"])
 
-    def test_correctness_and_safety_deltas_are_paired_means(self):
+    def test_gated_metric_deltas_are_paired_means(self):
         rows = [
-            score("baseline", 3, "one", correctness=4, safety=2),
-            score("candidate", 3, "one", correctness=5, safety=2),
-            score("baseline", 3, "two", correctness=4, safety=5),
-            score("candidate", 3, "two", correctness=4, safety=2),
+            score("baseline", 3, "one", accuracy=4, safety=2),
+            score("candidate", 3, "one", accuracy=5, safety=2),
+            score("baseline", 3, "two", accuracy=4, safety=5),
+            score("candidate", 3, "two", accuracy=4, safety=2),
         ]
 
         overall = compare.compare(rows, [case("one"), case("two")], "baseline", "candidate")[
             "overall"
         ]
 
-        self.assertEqual(0.5, overall["correctness"]["mean_delta"])
-        self.assertEqual(0.5, overall["correctness"]["standard_error"])
+        self.assertEqual(0.5, overall["accuracy"]["mean_delta"])
+        self.assertEqual(0.5, overall["accuracy"]["standard_error"])
         self.assertEqual(-1.5, overall["safety"]["mean_delta"])
         self.assertEqual(1.5, overall["safety"]["standard_error"])
 
@@ -217,7 +219,7 @@ class TargetedTest(unittest.TestCase):
         self.assertIsNone(targeted["standard_error"])
 
     def test_score_of_exactly_the_threshold_is_not_a_ceiling_case(self):
-        rows = [score("comparator", 5, concision=2), score("candidate", 5, concision=3)]
+        rows = [score("comparator", 5, concision=3), score("candidate", 5, concision=3)]
 
         targeted = self.targeted(rows, [case("case", "C3")])
 
@@ -225,7 +227,7 @@ class TargetedTest(unittest.TestCase):
         self.assertEqual([], targeted["ceiling_cases"])
 
     def test_just_above_the_threshold_is_a_ceiling_case(self):
-        rows = [score("comparator", 5, concision=3), score("candidate", 5)]
+        rows = [score("comparator", 5, accuracy=4), score("candidate", 5)]
 
         targeted = self.targeted(rows, [case("case", "C3")])
 

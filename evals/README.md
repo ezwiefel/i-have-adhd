@@ -123,6 +123,10 @@ those markers name the conditions, and sending them to a blind grader would
 leak the vocabulary the blinding exists to hide. Keep anything condition-identifying
 outside that block.
 
+The grader lists each response's problems before scoring it: `false` statements,
+`unsupported` claims, `missing` detail, and `unsure` suspicions that do not count.
+Score rows keep these lists under `issues`, so you can see why a response lost points.
+
 Runs are resumable the same way generation is: groups already present in the
 output file are skipped. A group missing a condition cannot be scored — the
 conditions would no longer be judged on identical rows — so it is reported on
@@ -147,7 +151,7 @@ Judging by hand instead is still supported: blind the `condition` field
 yourself and write one JSON object per response with these fields.
 
 ```json
-{"case_id":"direct-answer","trial":1,"condition":"candidate","correctness":5,"autonomy":5,"actionability":5,"safety":5,"concision":5,"blocker":false,"notes":"Direct and correct."}
+{"case_id":"direct-answer","trial":1,"condition":"candidate","accuracy":5,"grounding":5,"completeness":5,"autonomy":5,"actionability":5,"safety":5,"concision":5,"blocker":false,"notes":"Direct and correct."}
 ```
 
 Either way, apply the release gate:
@@ -180,7 +184,7 @@ python3 scripts/compare.py evals/results/scores.jsonl evals/cases.jsonl comparat
 Every delta is the second condition minus the first. Trials are averaged within a
 case, then cases are paired, so each case counts once. The JSON gives per-case
 weighted deltas, `overall` mean delta and standard error (the Noise band) for
-weighted score, correctness and safety, and blocker row counts per condition. A
+weighted score, accuracy, grounding and safety, and blocker row counts per condition. A
 standard error over fewer than two cases is `null`. Conditions not paired over the
 same groups, and scored cases missing from the cases file, are errors.
 
@@ -223,6 +227,12 @@ unchanged. Rerunning the same command resumes from the rows on disk. A rerun tha
 the skill, runner, model, CLI version, cases, trials, rubric or judge models is refused,
 and so is a change to the comparator or shared setup at any trial count, because scenario
 captures are shared across trial counts; use a new round name.
+
+To judge an earlier round's replies again, for example under a new rubric or with other
+judges, give a new round name and `--responses-from <earlier round>`. The new round reads
+that round's `shared/` rows in place, generates nothing, and leaves that folder unchanged,
+so the generation spend is still counted once. The earlier round's shared setup must
+match, as on any resume. It cannot be combined with `--scenarios`.
 
 A generator runner must have a determinable model (a `--model` flag or a `"model"` key in
 the runner config). A judge's recorded model is that flag, then that key, then the runner

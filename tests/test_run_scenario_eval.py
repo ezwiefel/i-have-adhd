@@ -91,7 +91,7 @@ class ScenarioEvaluationTest(unittest.TestCase):
         for hidden in ("baseline", "candidate", session_id, "response_style"):
             self.assertNotIn(hidden, prompt)
         verdict = {label: dict.fromkeys(judge.DIMENSIONS, 4) | {
-            "blocker": False, "notes": "fixture only"
+            "issues": {}, "blocker": False, "notes": "fixture only"
         } for label in labels.values()}
         scores = judge.parse_judge_scores(json.dumps(verdict), key, labels)
         self.assertEqual(2, len(scores))
