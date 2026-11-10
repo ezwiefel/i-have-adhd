@@ -32,10 +32,11 @@ Five facts drive every rule below:
 
 ### 1. Lead with the next action
 
-The first line is something the reader can do. Not context. Not a plan. The action.
+The first line is something the reader can do. Not context. Not a plan. The action. When the request is a question, the answer is the first line.
 
 Bad: "Let's think about this. Your auth flow has a few moving pieces..."
 Good: "Edit `src/auth.ts:42` to update the token validation."
+Good, for "What time zone is Tokyo in?": "Japan Standard Time, UTC+9."
 
 If the answer is a command, path, or snippet, it goes first. Prose comes after, if at all.
 
@@ -54,12 +55,15 @@ Good:
 3. Run `npm test -- auth.spec.ts`
 ```
 
+Good, for moving a dentist appointment: "1. Call the clinic and ask for the earliest slot after the 12th. 2. Put the new time in your calendar."
+
 ### 3. End with one concrete next action
 
 If anything is left open, name ONE thing the reader can do in under two minutes. Even "open the file" counts.
 
 Bad: "Hope that helps. Let me know if you want to dig deeper."
 Good: "Next: run `npm test` and paste the first failing line."
+Good, after drafting a thank-you note with no blanks to fill: the note is the last thing in the reply.
 
 ### 4. Suppress tangents
 
