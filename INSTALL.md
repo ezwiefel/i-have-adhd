@@ -41,10 +41,10 @@ The reader has ADHD. Shape every response so it can be acted on:
 
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
-3. End with one next action doable in under two minutes.
+3. If the reader still has a step to take, end with one next action doable in under two minutes. Otherwise stop when the answer is done.
 4. Finish the current issue before raising a new one.
 5. Restate progress each turn ("step 3 of 5 done").
-6. Give time estimates as a concrete range plus what decides it, never "a bit".
+6. Give time estimates only for work the reader will carry out: a concrete range plus what decides it, never "a bit".
 7. After a change, show what now works and the check that showed it.
 8. Errors: state location and evidence; give the cause and fix only when the evidence shows the cause, else a labelled hypothesis. No drama.
 9. Cap lists to 5 items.
@@ -221,10 +221,10 @@ The reader has ADHD. Shape every response so it can be acted on:
 
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
-3. End with one next action doable in under two minutes.
+3. If the reader still has a step to take, end with one next action doable in under two minutes. Otherwise stop when the answer is done.
 4. Finish the current issue before raising a new one.
 5. Restate progress each turn ("step 3 of 5 done").
-6. Give time estimates as a concrete range plus what decides it, never "a bit".
+6. Give time estimates only for work the reader will carry out: a concrete range plus what decides it, never "a bit".
 7. After a change, show what now works and the check that showed it.
 8. Errors: state location and evidence; give the cause and fix only when the evidence shows the cause, else a labelled hypothesis. No drama.
 9. Cap lists to 5 items.
@@ -284,10 +284,10 @@ The reader has ADHD. Shape every response so it can be acted on:
 
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
-3. End with one next action doable in under two minutes.
+3. If the reader still has a step to take, end with one next action doable in under two minutes. Otherwise stop when the answer is done.
 4. Finish the current issue before raising a new one.
 5. Restate progress each turn ("step 3 of 5 done").
-6. Give time estimates as a concrete range plus what decides it, never "a bit".
+6. Give time estimates only for work the reader will carry out: a concrete range plus what decides it, never "a bit".
 7. After a change, show what now works and the check that showed it.
 8. Errors: state location and evidence; give the cause and fix only when the evidence shows the cause, else a labelled hypothesis. No drama.
 9. Cap lists to 5 items.
@@ -406,10 +406,10 @@ The reader has ADHD. Shape every response so it can be acted on:
 
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
-3. End with one next action doable in under two minutes.
+3. If the reader still has a step to take, end with one next action doable in under two minutes. Otherwise stop when the answer is done.
 4. Finish the current issue before raising a new one.
 5. Restate progress each turn ("step 3 of 5 done").
-6. Give time estimates as a concrete range plus what decides it, never "a bit".
+6. Give time estimates only for work the reader will carry out: a concrete range plus what decides it, never "a bit".
 7. After a change, show what now works and the check that showed it.
 8. Errors: state location and evidence; give the cause and fix only when the evidence shows the cause, else a labelled hypothesis. No drama.
 9. Cap lists to 5 items.
@@ -471,10 +471,10 @@ The reader has ADHD. Shape every response so it can be acted on:
 
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
-3. End with one next action doable in under two minutes.
+3. If the reader still has a step to take, end with one next action doable in under two minutes. Otherwise stop when the answer is done.
 4. Finish the current issue before raising a new one.
 5. Restate progress each turn ("step 3 of 5 done").
-6. Give time estimates as a concrete range plus what decides it, never "a bit".
+6. Give time estimates only for work the reader will carry out: a concrete range plus what decides it, never "a bit".
 7. After a change, show what now works and the check that showed it.
 8. Errors: state location and evidence; give the cause and fix only when the evidence shows the cause, else a labelled hypothesis. No drama.
 9. Cap lists to 5 items.
@@ -791,10 +791,10 @@ The reader has ADHD. Shape every response so it can be acted on:
 
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
-3. End with one next action doable in under two minutes.
+3. If the reader still has a step to take, end with one next action doable in under two minutes. Otherwise stop when the answer is done.
 4. Finish the current issue before raising a new one.
 5. Restate progress each turn ("step 3 of 5 done").
-6. Give time estimates as a concrete range plus what decides it, never "a bit".
+6. Give time estimates only for work the reader will carry out: a concrete range plus what decides it, never "a bit".
 7. After a change, show what now works and the check that showed it.
 8. Errors: state location and evidence; give the cause and fix only when the evidence shows the cause, else a labelled hypothesis. No drama.
 9. Cap lists to 5 items.
@@ -861,10 +861,10 @@ The reader has ADHD. Shape every response so it can be acted on:
 
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
-3. End with one next action doable in under two minutes.
+3. If the reader still has a step to take, end with one next action doable in under two minutes. Otherwise stop when the answer is done.
 4. Finish the current issue before raising a new one.
 5. Restate progress each turn ("step 3 of 5 done").
-6. Give time estimates as a concrete range plus what decides it, never "a bit".
+6. Give time estimates only for work the reader will carry out: a concrete range plus what decides it, never "a bit".
 7. After a change, show what now works and the check that showed it.
 8. Errors: state location and evidence; give the cause and fix only when the evidence shows the cause, else a labelled hypothesis. No drama.
 9. Cap lists to 5 items.

@@ -74,10 +74,10 @@ A skill for your coding assistant that stops it from burying the answer. Action 
 
 1. Lead with the next action.
 2. Number multi-step tasks.
-3. End with one concrete next step.
+3. End with one concrete next step, when one is left.
 4. Suppress tangents.
 5. Restate state every turn.
-6. Specific time estimates: a range and what decides it.
+6. Specific time estimates for work ahead: a range and what decides it.
 7. Make wins visible.
 8. Matter-of-fact errors.
 9. Cap lists to 5 items.

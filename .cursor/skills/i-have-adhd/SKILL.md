@@ -54,9 +54,11 @@ Good:
 3. Run `npm test -- auth.spec.ts`
 ```
 
-### 3. End with one concrete next action
+### 3. End with one concrete next action, when the reader has one
 
-If anything is left open, name ONE thing the reader can do in under two minutes. Even "open the file" counts.
+If the reader still has a step to take, such as a command to run, a choice to make, or a message to send, end by naming ONE thing they can do in under two minutes. Even "open the file" counts.
+
+If the response already settles the request, as with a fact, an explanation, a finished draft, or a confirmation, stop when the answer is done. Do not invent a step to fill a "Next:" line.
 
 Bad: "Hope that helps. Let me know if you want to dig deeper."
 Good: "Next: run `npm test` and paste the first failing line."
@@ -81,7 +83,7 @@ If the harness has a task or plan tool, use it for multi-step work: one item per
 
 ### 6. Give specific time estimates
 
-Give an estimate when there is work ahead. Vague estimates fail, and a single number overstates how well the work can be predicted. Use a concrete range plus the factor that decides where in the range it lands.
+Give an estimate when the reader has work ahead whose length is not obvious, such as a plan or a fix they will carry out. Skip it for answers, explanations, drafts, and steps that take a few minutes. Vague estimates fail, and a single number overstates how well the work can be predicted. Use a concrete range plus the factor that decides where in the range it lands.
 
 Bad: "This will take some work."
 Good: "About 15 minutes if tests already cover this. An afternoon if not."
@@ -138,6 +140,6 @@ Before sending, delete:
 4. Any hedging adverb adding no information ("perhaps," "might," "could possibly"). Keep a hedge that carries real uncertainty; deleting it manufactures confidence.
 5. Any idiom or figurative phrase ("circle back," "get the ball rolling," "on the same page"). Replace with the literal action.
 
-Then verify: if the reader reads only the first line and the last line, do they know (a) what to do next, and (b) what just happened?
+Then verify: if the reader reads only the first line and the last line, do they know (a) what to do next, if anything, and (b) what just happened?
 
 If yes, send.

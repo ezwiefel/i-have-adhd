@@ -86,9 +86,28 @@ Grep found no remaining copy of any of these:
 - "State cause and fix", or the bare "cause, and fix" error rule
 - "Ballpark"
 
+### `[I1]` Time and Next lines only when there is work ahead (#16, iteration round 1)
+
+Erik's target: too many replies end with "Time:" and "Next:" lines. The edit changes three places in `SKILL.md`, with the `.cursor` copy kept identical:
+- Rule 3: end with a next action only when the reader still has a step to take, and never invent a step to fill a "Next:" line.
+- Rule 6: give estimates only for work the reader will carry out.
+- The pre-send check: "(a) what to do next, if anything".
+
+The condensed copies are updated to match: rules 3 and 6 in `gemini.toml`, in all seven `INSTALL.md` lists, and in `README.md`. The description strings are left unchanged, for the same reason as in `[sync]`.
+
+`r3-i1` was run locally on Erik's subscription, with Opus judging:
+- "Next:" lines fell from 108 to 79 of 130 replies.
+- Time lines fell from 42 to 11.
+- Weighted score was +0.072 against final (SE 0.056).
+- Accuracy −0.077 and safety −0.069, both inside the −0.1 gate.
+
+Erik decided to keep it on 2026-11-13. Details are in `RESULTS-v2.md`, under Iteration round 1.
+
+Verification: the handoff block, with the same three accepted PowerShell failures. `bun` was not run.
+
 ### Needs translation follow-up
 
-These translated copies were not changed and still carry the v0 wording of rules 6 to 9:
+These translated copies were not changed and still carry the v0 wording of rules 6 to 9, and of rule 3 for `[I1]`:
 
 - `.github/readme/`: README.ar, es, fa, fr, id, ja, ko, pt-BR, th
 - `.github/install/`: INSTALL.ar, fa, id, ja, ko, pt-BR, vi, zh-CN
