@@ -331,6 +331,30 @@ class ResponsesFromTest(RoundTestCase):
             run_round.reported_spend(self.results),
         )
 
+    def test_subscription_billing_stays_out_of_reported_spend(self):
+        cost = {"STUB_COST_USD": "0.01"}
+        self.assertEqual(0, self.run_cli(variant="", env=cost)[0])
+        spent = run_round.reported_spend(self.results)
+        no_key = {**cost, "ANTHROPIC_API_KEY": ""}
+
+        code, _, err = self.run_cli("--round=r2", "--responses-from=r1", "--billing=subscription", env=no_key)
+
+        self.assertEqual(0, code, err)
+        meta = self.meta("c1", "r2")
+        self.assertEqual("subscription", meta["billing"])
+        self.assertGreater(meta["reported_costs"]["total_usd"], 0)
+        self.assertAlmostEqual(spent, run_round.reported_spend(self.results))
+
+    def test_subscription_billing_refuses_a_key_or_new_shared_rows(self):
+        self.assertEqual(0, self.run_cli(variant="")[0])
+        code, _, err = self.run_cli("--round=r2", "--responses-from=r1", "--billing=subscription")
+        self.assertEqual(1, code)
+        self.assertIn("ANTHROPIC_API_KEY", err)
+        self.assertNotIn(SECRET, err)
+        code, _, err = self.run_cli("--round=r2", "--billing=subscription", env={"ANTHROPIC_API_KEY": ""})
+        self.assertEqual(1, code)
+        self.assertIn("--responses-from", err)
+
     def test_a_failed_scenario_status_does_not_block_reusing_whole_rows(self):
         self.assertEqual(0, self.run_cli(variant="")[0])
         meta_path = self.results / "r1" / "shared" / "meta.json"

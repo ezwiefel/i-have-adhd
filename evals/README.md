@@ -236,6 +236,12 @@ match, as on any resume. With `--scenarios`, the baseline and comparator scenari
 into that earlier round's `shared/` folder, like any shared rows, and its `meta.json` counts
 their spend.
 
+A run with `--responses-from` and no `--scenarios` can pass `--billing subscription` when the
+`claude` CLI is signed in to a Claude plan rather than holding an API key. It refuses to start while
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `GEMINI_API_KEY` is set. The CLI still reports a cost per
+call, so per-call and per-condition caps still apply, but the variant's `meta.json` records
+`"billing": "subscription"` and the $120 spend limit leaves that folder out.
+
 A generator runner must have a determinable model (a `--model` flag or a `"model"` key in
 the runner config). A judge's recorded model is that flag, then that key, then the runner
 name.

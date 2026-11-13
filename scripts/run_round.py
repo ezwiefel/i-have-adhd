@@ -45,6 +45,8 @@ VARIANT_SETUP = (
     "skills", "runner", "model", "cli_version", "effort", "limits", "trials", "case_set",
     "rubric_sha256", "judges", "responses_from",
 )
+# A key in the environment would let the CLI bill the API, so a subscription run refuses to start with one.
+BILLING_KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY")
 SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.IGNORECASE)
 
 
@@ -338,6 +340,8 @@ def reported_spend(results: Path) -> float:
     for directory in sorted(path for path in results.glob("*/*") if path.is_dir()):
         try:
             meta = json.loads((directory / "meta.json").read_text(encoding="utf-8"))
+            if isinstance(meta, dict) and meta.get("billing") == "subscription":
+                continue  # Billed to a Claude plan, not the API; the limit covers API spend.
             spent = judge._reported_cost(meta["reported_costs"]["total_usd"])
             if spent is None:
                 raise ValueError("total_usd is not a usable dollar figure")
@@ -441,6 +445,13 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
     responses_from = _name(args.responses_from, "--responses-from round") if args.responses_from else None
     if responses_from == round_name:
         raise RoundError("--responses-from must name another round")
+    if args.billing == "subscription":
+        # Only the variant folder is written, so its meta alone can carry the billing mark.
+        if not responses_from or scenarios:
+            raise RoundError("--billing subscription needs --responses-from and no --scenarios")
+        present = [name for name in BILLING_KEYS if os.environ.get(name)]
+        if present:
+            raise RoundError(f"--billing subscription refuses to run with {', '.join(present)} set")
     # run_scenario_eval always drives `claude --model <model>` itself.
     if scenarios and command[0] != "claude":
         raise RoundError("scenarios need a claude generator runner")
@@ -491,7 +502,7 @@ def _prepare(args: argparse.Namespace) -> SimpleNamespace:
             "cases": len(cases),
         },
         rubric_sha256=_sha256(rubric_path.read_text(encoding="utf-8")),
-        responses_from=responses_from,
+        responses_from=responses_from, billing=args.billing,
     )
 
 
@@ -542,6 +553,7 @@ def _base_meta(plan: SimpleNamespace, public_sha: str) -> dict[str, Any]:
         "case_set": plan.case_set,
         "rubric_sha256": plan.rubric_sha256,
         "responses_from": plan.responses_from,
+        "billing": plan.billing,
         "scenarios": plan.scenarios,
         "judges": [
             {
@@ -756,7 +768,7 @@ def run_round(args: argparse.Namespace) -> int:
     spent = reported_spend(plan.results)
     caps = _run_caps(plan)
     # Runners can overshoot a cap by one call, so reaching the limit counts as crossing it.
-    if spent + caps >= SPEND_LIMIT_USD:
+    if plan.billing == "api" and spent + caps >= SPEND_LIMIT_USD:
         raise RoundError(
             f"reported spend ${spent:.2f} plus this run's caps ${caps:.2f} would reach "
             f"the ${SPEND_LIMIT_USD:.0f} limit; refusing to start"
@@ -802,6 +814,10 @@ def _build_parser() -> argparse.ArgumentParser:
     add("--cases", type=Path, help="Inside the workspace; default evals/cases.jsonl")
     add("--rubric", type=Path, help="Inside the workspace; default evals/rubric.md")
     add("--responses-from", default="", help="Judge another round's baseline and comparator rows")
+    add(
+        "--billing", choices=("api", "subscription"), default="api",
+        help="subscription: the CLI's Claude login pays, so the spend limit skips this run",
+    )
     return parser
 
 
